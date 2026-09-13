@@ -72,34 +72,11 @@ if [[ -f "$DOCROOT/wp-config.php" ]]; then
     [[ "$SITE_URL" =~ ^https?://loja\.belastock\.com\.br/?$ ]] || fail "WordPress existente aponta SITEURL para outro endereço: ${SITE_URL:-vazio}"
     EXISTING_WP="sim"
     log "WordPress existente validado como ${DOMAIN}; adoção segura autorizada pelas travas."
-  else
-    log "wp-config.php existe, mas o WordPress ainda não está instalado. Será concluído usando a configuração existente."
   fi
-else
-  log "Nenhum wp-config.php encontrado; preparando WordPress novo apenas no subdomínio"
-  if ! mysql -NBe "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='${DB_NAME}'" 2>/dev/null | grep -qx "$DB_NAME"; then
-    clpctl db:add \
-      --domainName="$DOMAIN" \
-      --databaseName="$DB_NAME" \
-      --databaseUserName="$DB_USER" \
-      --databaseUserPassword="$DB_PASSWORD"
-  fi
-
-  sudo -u "$SITE_USER" -H wp core download --path="$DOCROOT" --locale=pt_BR --force
-  run_wp_safe config create --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASSWORD" --dbhost="127.0.0.1" --dbcharset="utf8mb4" --skip-check
 fi
 
 if ! run_wp_safe core is-installed >/dev/null 2>&1; then
-  log "Instalando WordPress da loja"
-  run_wp_safe core install \
-    --url="https://${DOMAIN}" \
-    --title="Bela Stock — Loja" \
-    --admin_user="$ADMIN_USER" \
-    --admin_password="$ADMIN_PASSWORD" \
-    --admin_email="$ADMIN_EMAIL" \
-    --skip-email
-else
-  log "WordPress já instalado; preservando banco e conteúdo existentes."
+  fail "WordPress da loja não está instalado no subdomínio validado."
 fi
 
 log "Aplicando configuração de produção do WordPress"
@@ -111,14 +88,12 @@ run_wp_safe config set WP_DEBUG_LOG false --raw >/dev/null
 run_wp_safe config set WP_ENVIRONMENT_TYPE production >/dev/null
 
 if run_wp_safe user get "$ADMIN_USER" --field=ID >/dev/null 2>&1; then
-  log "Atualizando senha do administrador dedicado da loja"
   run_wp_safe user update "$ADMIN_USER" --user_pass="$ADMIN_PASSWORD" --role=administrator >/dev/null
 else
-  log "Criando administrador dedicado da loja"
   run_wp_safe user create "$ADMIN_USER" "$ADMIN_EMAIL" --role=administrator --user_pass="$ADMIN_PASSWORD" >/dev/null
 fi
 
-log "Criando backup do banco antes da sincronização"
+log "Criando backup do banco antes das atualizações"
 mkdir -p "$BACKUP_DIR"
 chown "$SITE_USER:$SITE_USER" "$BACKUP_DIR"
 BACKUP_FILE="$BACKUP_DIR/db_$(date '+%Y%m%d_%H%M%S').sql"
@@ -126,23 +101,53 @@ run_wp_safe db export "$BACKUP_FILE" --add-drop-table >/dev/null
 gzip -f "$BACKUP_FILE"
 find "$BACKUP_DIR" -maxdepth 1 -type f -name 'db_*.sql.gz' -mtime +14 -delete || true
 
-log "Sincronizando somente tema e plugin próprios da loja"
-mkdir -p "$DOCROOT/wp-content/themes/belastock-store" "$DOCROOT/wp-content/plugins/belastock-core"
+log "Sincronizando tema e os dois plugins próprios da Bela Stock"
+mkdir -p \
+  "$DOCROOT/wp-content/themes/belastock-store" \
+  "$DOCROOT/wp-content/plugins/belastock-core" \
+  "$DOCROOT/wp-content/plugins/belastock-shop-cards"
 rsync -a --delete "$REPO_ROOT/wp-content/themes/belastock-store/" "$DOCROOT/wp-content/themes/belastock-store/"
 rsync -a --delete "$REPO_ROOT/wp-content/plugins/belastock-core/" "$DOCROOT/wp-content/plugins/belastock-core/"
-chown -R "$SITE_USER:$SITE_USER" "$DOCROOT/wp-content/themes/belastock-store" "$DOCROOT/wp-content/plugins/belastock-core"
+rsync -a --delete "$REPO_ROOT/wp-content/plugins/belastock-shop-cards/" "$DOCROOT/wp-content/plugins/belastock-shop-cards/"
 
-log "Instalando WooCommerce e integrações"
+mkdir -p "$DOCROOT/wp-content/themes/belastock-store/assets"
+[[ -f "$REPO_ROOT/deploy/assets/belastock-logo.webp.b64" ]] || fail "Logo Bela Stock codificada não encontrada no repositório."
+base64 -d "$REPO_ROOT/deploy/assets/belastock-logo.webp.b64" > "$DOCROOT/wp-content/themes/belastock-store/assets/belastock-logo.webp"
+[[ -s "$DOCROOT/wp-content/themes/belastock-store/assets/belastock-logo.webp" ]] || fail "Falha ao materializar a logo Bela Stock."
+chown -R "$SITE_USER:$SITE_USER" \
+  "$DOCROOT/wp-content/themes/belastock-store" \
+  "$DOCROOT/wp-content/plugins/belastock-core" \
+  "$DOCROOT/wp-content/plugins/belastock-shop-cards"
+
+log "Instalando/ativando plugins necessários"
 run_wp plugin install woocommerce --activate
+run_wp plugin install elementor --activate
 run_wp plugin install woocommerce-mercadopago --activate
 run_wp plugin install woocommerce-paypal-payments --activate
 run_wp plugin install melhor-envio-cotacao --activate
 run_wp plugin activate belastock-core
+run_wp plugin activate belastock-shop-cards
 run_wp theme activate belastock-store
+
+log "Verificando e aplicando atualizações de plugins"
+run_wp plugin update --all || log "Algum plugin externo recusou atualização automática; os plugins críticos serão validados individualmente."
+for plugin in woocommerce elementor woocommerce-mercadopago woocommerce-paypal-payments melhor-envio-cotacao; do
+  run_wp plugin update "$plugin" || true
+  run_wp plugin is-active "$plugin" >/dev/null || fail "Plugin obrigatório inativo após atualização: $plugin"
+done
+run_wp plugin is-active belastock-core >/dev/null || fail "Bela Stock Core inativo."
+run_wp plugin is-active belastock-shop-cards >/dev/null || fail "Bela Stock Shop Cards inativo."
+
+REQUIRED_UPDATES="$(run_wp plugin list --update=available --field=name 2>/dev/null || true)"
+for plugin in woocommerce elementor woocommerce-mercadopago woocommerce-paypal-payments melhor-envio-cotacao; do
+  if printf '%s\n' "$REQUIRED_UPDATES" | grep -qx "$plugin"; then
+    fail "Atualização ainda pendente no plugin obrigatório: $plugin"
+  fi
+done
 
 log "Configurando WooCommerce Brasil"
 run_wp_safe option update blogname "Bela Stock — Loja"
-run_wp_safe option update blogdescription "Camisetas, bonés e adesivos"
+run_wp_safe option update blogdescription "Vista-se bem e comunique-se melhor"
 run_wp_safe option update timezone_string "America/Sao_Paulo"
 run_wp_safe option update permalink_structure '/%postname%/'
 run_wp_safe option update woocommerce_currency 'BRL'
@@ -151,19 +156,21 @@ run_wp_safe option update woocommerce_weight_unit 'kg'
 run_wp_safe option update woocommerce_dimension_unit 'cm'
 run_wp_safe option update woocommerce_enable_guest_checkout 'yes'
 run_wp_safe option update woocommerce_calc_taxes 'yes'
-run_wp eval 'if (class_exists("WC_Install")) { WC_Install::create_pages(); }'
-run_wp rewrite flush
+run_wp --skip-plugins=elementor eval 'if (class_exists("WC_Install")) { WC_Install::create_pages(); }'
+run_wp --skip-plugins=elementor rewrite flush
 
 for spec in "Camisetas:camisetas" "Bonés:bones" "Adesivos:adesivos"; do
   NAME="${spec%%:*}"; SLUG="${spec##*:}"
-  if ! run_wp term get product_cat "$SLUG" --by=slug --field=term_id >/dev/null 2>&1; then
-    run_wp term create product_cat "$NAME" --slug="$SLUG" >/dev/null
+  if ! run_wp --skip-plugins=elementor term get product_cat "$SLUG" --by=slug --field=term_id >/dev/null 2>&1; then
+    run_wp --skip-plugins=elementor term create product_cat "$NAME" --slug="$SLUG" >/dev/null
   fi
 done
 
-log "Aplicando finalização comercial e operacional"
-[[ -f "$REPO_ROOT/deploy/FINALIZE_STORE.php" ]] || fail "Finalizador da loja não encontrado no repositório."
+log "Aplicando Elementor, cabeçalho, barra, capa, rodapé, produto e descontos"
+[[ -f "$REPO_ROOT/deploy/FINALIZE_STORE.php" ]] || fail "Finalizador da loja não encontrado."
 run_wp eval-file "$REPO_ROOT/deploy/FINALIZE_STORE.php"
+run_wp elementor flush-css >/dev/null 2>&1 || true
+run_wp cache flush >/dev/null 2>&1 || true
 
 if [[ "$(run_wp_safe post get 1 --field=post_name 2>/dev/null | tail -n1 || true)" == "hello-world" ]]; then
   run_wp_safe post delete 1 --force >/dev/null 2>&1 || true
@@ -179,70 +186,77 @@ log "Instalando/verificando SSL"
 SSL_STATUS="pendente"
 if clpctl lets-encrypt:install:certificate --domainName="$DOMAIN" >/tmp/belastock-loja-ssl.log 2>&1; then
   SSL_STATUS="ok"
-else
-  if curl -k -sS --max-time 8 -o /dev/null --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/"; then
-    SSL_STATUS="ok-existente"
-  else
-    log "SSL ainda não confirmado; verifique DNS/certificado no CloudPanel."
-  fi
+elif curl -k -sS --max-time 8 -o /dev/null --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/"; then
+  SSL_STATUS="ok-existente"
 fi
-if [[ "$SSL_STATUS" == ok* ]]; then
-  run_wp_safe config set FORCE_SSL_ADMIN true --raw >/dev/null
-fi
+[[ "$SSL_STATUS" == ok* ]] || fail "SSL não confirmado para a loja."
+run_wp_safe config set FORCE_SSL_ADMIN true --raw >/dev/null
 
 log "Verificação técnica final"
 run_wp_safe core is-installed
-run_wp plugin is-active woocommerce
-run_wp plugin is-active woocommerce-mercadopago
-run_wp plugin is-active woocommerce-paypal-payments
-run_wp plugin is-active melhor-envio-cotacao
-run_wp plugin is-active belastock-core
-run_wp theme is-active belastock-store
+for plugin in woocommerce elementor woocommerce-mercadopago woocommerce-paypal-payments melhor-envio-cotacao belastock-core belastock-shop-cards; do
+  run_wp plugin is-active "$plugin" >/dev/null || fail "Plugin inativo na auditoria final: $plugin"
+done
+run_wp theme is-active belastock-store >/dev/null || fail "Tema Bela Stock Store não está ativo."
+[[ -s "$DOCROOT/wp-content/themes/belastock-store/assets/belastock-logo.webp" ]] || fail "Logo não instalada."
+
+ELEMENTOR_PRODUCT_SUPPORT="$(run_wp_safe option get elementor_cpt_support --format=json 2>/dev/null || true)"
+printf '%s' "$ELEMENTOR_PRODUCT_SUPPORT" | grep -q 'product' || fail "Produtos não estão habilitados no Elementor."
+HEADER_PAGE_ID="$(run_wp_safe option get belastock_header_page_id 2>/dev/null | tail -n1 || true)"
+FOOTER_PAGE_ID="$(run_wp_safe option get belastock_footer_page_id 2>/dev/null | tail -n1 || true)"
+HOME_PAGE_ID="$(run_wp_safe option get page_on_front 2>/dev/null | tail -n1 || true)"
+[[ "$HEADER_PAGE_ID" =~ ^[0-9]+$ && "$FOOTER_PAGE_ID" =~ ^[0-9]+$ && "$HOME_PAGE_ID" =~ ^[0-9]+$ ]] || fail "Páginas Elementor editáveis não foram configuradas."
 
 HOME_STATUS="$(curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/" || true)"
-
 page_status(){
-  local option="$1"
-  local id slug
+  local option="$1" id slug
   id="$(run_wp_safe option get "$option" 2>/dev/null | tail -n1 || true)"
   [[ "$id" =~ ^[0-9]+$ ]] || { printf '000'; return; }
   slug="$(run_wp_safe post get "$id" --field=post_name 2>/dev/null | tail -n1 || true)"
   [[ -n "$slug" ]] || { printf '000'; return; }
   curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/${slug}/" || true
 }
-
 SHOP_STATUS="$(page_status woocommerce_shop_page_id)"
 CART_STATUS="$(page_status woocommerce_cart_page_id)"
 CHECKOUT_STATUS="$(page_status woocommerce_checkout_page_id)"
 ACCOUNT_STATUS="$(page_status woocommerce_myaccount_page_id)"
-
 for code in "$HOME_STATUS" "$SHOP_STATUS" "$CART_STATUS" "$CHECKOUT_STATUS" "$ACCOUNT_STATUS"; do
   [[ "$code" =~ ^[23][0-9][0-9]$ ]] || fail "Uma URL crítica da loja não respondeu corretamente (HTTP=$code)."
 done
 
-MP_ACTIVE="$(run_wp plugin is-active woocommerce-mercadopago >/dev/null 2>&1 && echo sim || echo nao)"
-PAYPAL_ACTIVE="$(run_wp plugin is-active woocommerce-paypal-payments >/dev/null 2>&1 && echo sim || echo nao)"
-MELHOR_ENVIO_ACTIVE="$(run_wp plugin is-active melhor-envio-cotacao >/dev/null 2>&1 && echo sim || echo nao)"
+plugin_version(){ run_wp plugin get "$1" --field=version 2>/dev/null | tail -n1; }
+WC_VERSION="$(plugin_version woocommerce)"
+ELEMENTOR_VERSION_INSTALLED="$(plugin_version elementor)"
+MP_VERSION="$(plugin_version woocommerce-mercadopago)"
+PAYPAL_VERSION="$(plugin_version woocommerce-paypal-payments)"
+ME_VERSION="$(plugin_version melhor-envio-cotacao)"
+CORE_VERSION="$(plugin_version belastock-core)"
+CARDS_VERSION="$(plugin_version belastock-shop-cards)"
+OUTDATED_PLUGINS="$(run_wp plugin list --update=available --field=name 2>/dev/null | paste -sd, - || true)"
 
 cat <<EOF
 ============================================================
- BELA STOCK LOJA - PRODUCAO VALIDADA
+ BELA STOCK LOJA - UPGRADE TOTAL VALIDADO
 ============================================================
 DOMAIN=https://${DOMAIN}
 DOCROOT=${DOCROOT}
-EXISTING_WORDPRESS_ADOPTED=${EXISTING_WP}
-WORDPRESS=ok
-WOOCOMMERCE=ok
-THEME=belastock-store
-ADMIN_USER=${ADMIN_USER}
-ADMIN_SECRET_FILE=${SECRETS_FILE}
 BACKUP=${BACKUP_FILE}.gz
-PRODUCT_VIEWS=frente,verso,lateral,detalhe,mockup
-PRODUCT_CATEGORIES=camisetas,bones,adesivos
-PRODUCT_ATTRIBUTES=tamanho,cor
-MERCADO_PAGO_PLUGIN=${MP_ACTIVE}
-PAYPAL_PLUGIN=${PAYPAL_ACTIVE}
-MELHOR_ENVIO_PLUGIN=${MELHOR_ENVIO_ACTIVE}
+WORDPRESS=ok
+WOOCOMMERCE=${WC_VERSION}
+ELEMENTOR=${ELEMENTOR_VERSION_INSTALLED}
+MERCADO_PAGO=${MP_VERSION}
+PAYPAL=${PAYPAL_VERSION}
+MELHOR_ENVIO=${ME_VERSION}
+BELASTOCK_CORE=${CORE_VERSION}
+BELASTOCK_SHOP_CARDS=${CARDS_VERSION}
+LOGO=ok
+MOCKUPS=fotos-reais-jpg-webp-frente-verso-lateral-detalhe
+ELEMENTOR_HEADER_PAGE=${HEADER_PAGE_ID}
+ELEMENTOR_FOOTER_PAGE=${FOOTER_PAGE_ID}
+ELEMENTOR_HOME_PAGE=${HOME_PAGE_ID}
+ELEMENTOR_PRODUCTS=sim
+DISCOUNTS=1:0,2:5,5:10,10:15,20:20,50:25-editavel
+OUTDATED_PLUGINS=${OUTDATED_PLUGINS:-nenhum}
 EXTERNAL_ACCOUNTS=autorizacao-das-contas-ainda-necessaria-para-transacoes-reais
 SSL=${SSL_STATUS}
 HTTP_HOME=${HOME_STATUS}
