@@ -66,47 +66,70 @@ if [[ ! -r /dev/tty ]]; then
   exit 1
 fi
 
-RUNNER_TOKEN=""
-while [[ -z "${RUNNER_TOKEN}" ]]; do
-  echo
-  echo "============================================================" > /dev/tty
-  echo " AGORA COLE O TOKEN DO GITHUB" > /dev/tty
-  echo " Nada aparecerá na tela durante a colagem. Depois pressione ENTER." > /dev/tty
-  echo " Aceito também o comando completo ./config.sh ... --token TOKEN" > /dev/tty
-  echo "============================================================" > /dev/tty
-  printf "TOKEN: " > /dev/tty
-  IFS= read -r -s RUNNER_TOKEN < /dev/tty || true
-  printf "\n" > /dev/tty
-
-  RUNNER_TOKEN="${RUNNER_TOKEN//$'\r'/}"
-
-  if [[ "${RUNNER_TOKEN}" == *"--token"* ]]; then
-    PARSED_TOKEN="$(printf '%s\n' "${RUNNER_TOKEN}" | sed -nE 's/.*--token[[:space:]]+([^[:space:]\\]+).*/\1/p' | head -n1)"
-    if [[ -n "${PARSED_TOKEN}" ]]; then
-      RUNNER_TOKEN="${PARSED_TOKEN}"
-    fi
-    unset PARSED_TOKEN
-  fi
-
-  if [[ -z "${RUNNER_TOKEN}" ]]; then
-    echo "ERRO: você pressionou ENTER sem colar o token. Tente novamente." > /dev/tty
-  fi
-done
-
-echo "Token recebido (${#RUNNER_TOKEN} caracteres). Conteúdo oculto."
-
 export RUNNER_ALLOW_RUNASROOT=1
 
-echo "[3/5] Registrando runner exclusivo da loja..."
-./config.sh \
-  --unattended \
-  --url "${REPO_URL}" \
-  --token "${RUNNER_TOKEN}" \
-  --name "${RUNNER_NAME}" \
-  --labels "${RUNNER_LABEL}" \
-  --work "_work" \
-  --replace
-unset RUNNER_TOKEN
+while [[ ! -f .runner ]]; do
+  RUNNER_TOKEN=""
+
+  while :; do
+    echo "" > /dev/tty
+    echo "============================================================" > /dev/tty
+    echo " COLE O TOKEN REAL GERADO PELO GITHUB" > /dev/tty
+    echo " GitHub > loja_belastock > Settings > Actions > Runners" > /dev/tty
+    echo " > New self-hosted runner" > /dev/tty
+    echo " O token e temporario e expira em cerca de 1 hora." > /dev/tty
+    echo " Pode colar somente o token ou o comando completo com --token." > /dev/tty
+    echo "============================================================" > /dev/tty
+    printf "TOKEN: " > /dev/tty
+    IFS= read -r -s RUNNER_TOKEN < /dev/tty || true
+    printf "\n" > /dev/tty
+
+    RUNNER_TOKEN="${RUNNER_TOKEN//$'\r'/}"
+
+    if [[ "${RUNNER_TOKEN}" == *"--token"* ]]; then
+      PARSED_TOKEN="$(printf '%s\n' "${RUNNER_TOKEN}" | sed -nE 's/.*--token[[:space:]]+([^[:space:]\\]+).*/\1/p' | head -n1)"
+      if [[ -n "${PARSED_TOKEN}" ]]; then
+        RUNNER_TOKEN="${PARSED_TOKEN}"
+      fi
+      unset PARSED_TOKEN
+    fi
+
+    UPPER_TOKEN="$(printf '%s' "${RUNNER_TOKEN}" | tr '[:lower:]' '[:upper:]')"
+    if [[ -z "${RUNNER_TOKEN}" ]]; then
+      echo "ERRO: nenhum token foi colado. Tente novamente." > /dev/tty
+      continue
+    fi
+    if [[ "${UPPER_TOKEN}" == "TOKEN" || "${UPPER_TOKEN}" == "NOVO_TOKEN" || "${UPPER_TOKEN}" == "SEU_TOKEN" || "${UPPER_TOKEN}" == "TOKEN_NOVO_DO_GITHUB" ]]; then
+      echo "ERRO: isso e apenas um texto de exemplo, nao o token real do GitHub." > /dev/tty
+      continue
+    fi
+    if (( ${#RUNNER_TOKEN} < 20 )); then
+      echo "ERRO: token curto demais (${#RUNNER_TOKEN} caracteres). O token real e bem maior." > /dev/tty
+      continue
+    fi
+    break
+  done
+
+  echo "Token recebido (${#RUNNER_TOKEN} caracteres). Conteudo oculto."
+  echo "[3/5] Registrando runner exclusivo da loja..."
+
+  if ./config.sh \
+      --unattended \
+      --url "${REPO_URL}" \
+      --token "${RUNNER_TOKEN}" \
+      --name "${RUNNER_NAME}" \
+      --labels "${RUNNER_LABEL}" \
+      --work "_work" \
+      --replace; then
+    unset RUNNER_TOKEN UPPER_TOKEN
+    break
+  fi
+
+  unset RUNNER_TOKEN UPPER_TOKEN
+  echo "" > /dev/tty
+  echo "Falha ao registrar. O token pode estar incorreto ou expirado." > /dev/tty
+  echo "Gere um NOVO token no GitHub e tente novamente nesta mesma tela." > /dev/tty
+done
 
 echo "[4/5] Instalando serviço systemd..."
 ./svc.sh install root
