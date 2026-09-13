@@ -63,13 +63,33 @@ if [[ -f .runner ]]; then
   exit 0
 fi
 
-printf "Cole o NOVO token de registro do runner do GitHub e pressione Enter: "
-read -r -s RUNNER_TOKEN
-echo
-if [[ -z "${RUNNER_TOKEN}" ]]; then
-  echo "Token vazio. Abortando sem alterar a configuração."
+if [[ ! -r /dev/tty ]]; then
+  echo "ERRO: não foi possível acessar o terminal /dev/tty para receber o token."
   exit 1
 fi
+
+RUNNER_TOKEN=""
+while [[ -z "${RUNNER_TOKEN}" ]]; do
+  printf "Cole o NOVO token (ou o comando completo com --token) e pressione Enter: " > /dev/tty
+  IFS= read -r -s RUNNER_TOKEN < /dev/tty || true
+  printf "\n" > /dev/tty
+
+  RUNNER_TOKEN="${RUNNER_TOKEN//$'\r'/}"
+
+  if [[ "${RUNNER_TOKEN}" == *"--token"* ]]; then
+    PARSED_TOKEN="$(printf '%s\n' "${RUNNER_TOKEN}" | sed -nE 's/.*--token[[:space:]]+([^[:space:]\\]+).*/\1/p' | head -n1)"
+    if [[ -n "${PARSED_TOKEN}" ]]; then
+      RUNNER_TOKEN="${PARSED_TOKEN}"
+    fi
+    unset PARSED_TOKEN
+  fi
+
+  if [[ -z "${RUNNER_TOKEN}" ]]; then
+    echo "Nenhum caractere foi recebido. Cole o token antes de pressionar Enter." > /dev/tty
+  fi
+done
+
+echo "Token recebido com ${#RUNNER_TOKEN} caracteres; conteúdo mantido oculto."
 
 export RUNNER_ALLOW_RUNASROOT=1
 
