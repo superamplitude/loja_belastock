@@ -1,0 +1,42 @@
+name: Deploy Bela Stock Loja
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-loja-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: WordPress WooCommerce production
+    runs-on: self-hosted
+    timeout-minutes: 35
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Guard repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "superamplitude/loja_belastock"
+          test -f deploy/EXECUCAO_TOTAL_LOJA.sh
+
+      - name: Deploy loja.belastock.com.br
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x deploy/EXECUCAO_TOTAL_LOJA.sh
+          if [ "$(id -u)" -eq 0 ]; then
+            bash deploy/EXECUCAO_TOTAL_LOJA.sh
+          elif sudo -n true 2>/dev/null; then
+            sudo -E bash deploy/EXECUCAO_TOTAL_LOJA.sh
+          else
+            echo "Runner precisa executar como root ou possuir sudo sem senha."
+            exit 1
+          fi
