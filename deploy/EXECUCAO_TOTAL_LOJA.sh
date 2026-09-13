@@ -10,6 +10,7 @@ DB_USER="belastock_loja"
 ADMIN_USER="belastock_admin"
 ADMIN_EMAIL="contato@belastock.com.br"
 REPO_ROOT="${GITHUB_WORKSPACE:-$(cd "$(dirname "$0")/.." && pwd)}"
+BACKUP_DIR="/home/${SITE_USER}/backups/loja_belastock"
 
 log(){ printf '\n[%s] %s\n' "$(date '+%H:%M:%S')" "$*"; }
 fail(){ printf '\n[ERRO] %s\n' "$*" >&2; exit 1; }
@@ -86,8 +87,6 @@ else
 
   sudo -u "$SITE_USER" -H wp core download --path="$DOCROOT" --locale=pt_BR --force
   run_wp_safe config create --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASSWORD" --dbhost="127.0.0.1" --dbcharset="utf8mb4" --skip-check
-  run_wp_safe config set DISALLOW_FILE_EDIT true --raw
-  run_wp_safe config set WP_AUTO_UPDATE_CORE minor
 fi
 
 if ! run_wp_safe core is-installed >/dev/null 2>&1; then
@@ -103,6 +102,14 @@ else
   log "WordPress já instalado; preservando banco e conteúdo existentes."
 fi
 
+log "Aplicando configuração de produção do WordPress"
+run_wp_safe config set DISALLOW_FILE_EDIT true --raw >/dev/null
+run_wp_safe config set WP_AUTO_UPDATE_CORE minor >/dev/null
+run_wp_safe config set WP_DEBUG false --raw >/dev/null
+run_wp_safe config set WP_DEBUG_DISPLAY false --raw >/dev/null
+run_wp_safe config set WP_DEBUG_LOG false --raw >/dev/null
+run_wp_safe config set WP_ENVIRONMENT_TYPE production >/dev/null
+
 if run_wp_safe user get "$ADMIN_USER" --field=ID >/dev/null 2>&1; then
   log "Atualizando senha do administrador dedicado da loja"
   run_wp_safe user update "$ADMIN_USER" --user_pass="$ADMIN_PASSWORD" --role=administrator >/dev/null
@@ -110,6 +117,14 @@ else
   log "Criando administrador dedicado da loja"
   run_wp_safe user create "$ADMIN_USER" "$ADMIN_EMAIL" --role=administrator --user_pass="$ADMIN_PASSWORD" >/dev/null
 fi
+
+log "Criando backup do banco antes da sincronização"
+mkdir -p "$BACKUP_DIR"
+chown "$SITE_USER:$SITE_USER" "$BACKUP_DIR"
+BACKUP_FILE="$BACKUP_DIR/db_$(date '+%Y%m%d_%H%M%S').sql"
+run_wp_safe db export "$BACKUP_FILE" --add-drop-table >/dev/null
+gzip -f "$BACKUP_FILE"
+find "$BACKUP_DIR" -maxdepth 1 -type f -name 'db_*.sql.gz' -mtime +14 -delete || true
 
 log "Sincronizando somente tema e plugin próprios da loja"
 mkdir -p "$DOCROOT/wp-content/themes/belastock-store" "$DOCROOT/wp-content/plugins/belastock-core"
@@ -146,6 +161,10 @@ for spec in "Camisetas:camisetas" "Bonés:bones" "Adesivos:adesivos"; do
   fi
 done
 
+log "Aplicando finalização comercial e operacional"
+[[ -f "$REPO_ROOT/deploy/FINALIZE_STORE.php" ]] || fail "Finalizador da loja não encontrado no repositório."
+run_wp eval-file "$REPO_ROOT/deploy/FINALIZE_STORE.php"
+
 if [[ "$(run_wp_safe post get 1 --field=post_name 2>/dev/null | tail -n1 || true)" == "hello-world" ]]; then
   run_wp_safe post delete 1 --force >/dev/null 2>&1 || true
 fi
@@ -156,28 +175,58 @@ find "$DOCROOT" -type d -exec chmod 755 {} +
 find "$DOCROOT" -type f -exec chmod 644 {} +
 chmod 640 "$DOCROOT/wp-config.php"
 
-log "Tentando instalar SSL (falha de DNS não interrompe o deploy)"
+log "Instalando/verificando SSL"
 SSL_STATUS="pendente"
 if clpctl lets-encrypt:install:certificate --domainName="$DOMAIN" >/tmp/belastock-loja-ssl.log 2>&1; then
   SSL_STATUS="ok"
 else
-  log "SSL ainda não emitido; normalmente significa DNS ainda não apontado ou certificado já gerenciado."
+  if curl -k -sS --max-time 8 -o /dev/null --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/"; then
+    SSL_STATUS="ok-existente"
+  else
+    log "SSL ainda não confirmado; verifique DNS/certificado no CloudPanel."
+  fi
+fi
+if [[ "$SSL_STATUS" == ok* ]]; then
+  run_wp_safe config set FORCE_SSL_ADMIN true --raw >/dev/null
 fi
 
-log "Verificação final"
+log "Verificação técnica final"
 run_wp_safe core is-installed
-run_wp_safe plugin is-active woocommerce
-run_wp_safe plugin is-active belastock-core
-run_wp_safe theme is-active belastock-store
+run_wp plugin is-active woocommerce
+run_wp plugin is-active woocommerce-mercadopago
+run_wp plugin is-active woocommerce-paypal-payments
+run_wp plugin is-active melhor-envio-cotacao
+run_wp plugin is-active belastock-core
+run_wp theme is-active belastock-store
 
-HTTP_STATUS="$(curl -L -k -sS --max-time 12 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/" || true)"
-if [[ "$HTTP_STATUS" == "000" ]]; then
-  HTTP_STATUS="$(curl -L -sS --max-time 12 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:80:127.0.0.1" "http://${DOMAIN}/" || true)"
-fi
+HOME_STATUS="$(curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/" || true)"
+
+page_status(){
+  local option="$1"
+  local id slug
+  id="$(run_wp_safe option get "$option" 2>/dev/null | tail -n1 || true)"
+  [[ "$id" =~ ^[0-9]+$ ]] || { printf '000'; return; }
+  slug="$(run_wp_safe post get "$id" --field=post_name 2>/dev/null | tail -n1 || true)"
+  [[ -n "$slug" ]] || { printf '000'; return; }
+  curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/${slug}/" || true
+}
+
+SHOP_STATUS="$(page_status woocommerce_shop_page_id)"
+CART_STATUS="$(page_status woocommerce_cart_page_id)"
+CHECKOUT_STATUS="$(page_status woocommerce_checkout_page_id)"
+ACCOUNT_STATUS="$(page_status woocommerce_myaccount_page_id)"
+
+for code in "$HOME_STATUS" "$SHOP_STATUS" "$CART_STATUS" "$CHECKOUT_STATUS" "$ACCOUNT_STATUS"; do
+  [[ "$code" =~ ^[23][0-9][0-9]$ ]] || fail "Uma URL crítica da loja não respondeu corretamente (HTTP=$code)."
+done
+
+MP_ACTIVE="$(run_wp plugin is-active woocommerce-mercadopago >/dev/null 2>&1 && echo sim || echo nao)"
+PAYPAL_ACTIVE="$(run_wp plugin is-active woocommerce-paypal-payments >/dev/null 2>&1 && echo sim || echo nao)"
+MELHOR_ENVIO_ACTIVE="$(run_wp plugin is-active melhor-envio-cotacao >/dev/null 2>&1 && echo sim || echo nao)"
 
 cat <<EOF
 ============================================================
- BELA STOCK LOJA - DEPLOY CONCLUIDO
+ BELA STOCK LOJA - PRODUCAO VALIDADA
 ============================================================
 DOMAIN=https://${DOMAIN}
 DOCROOT=${DOCROOT}
@@ -187,12 +236,20 @@ WOOCOMMERCE=ok
 THEME=belastock-store
 ADMIN_USER=${ADMIN_USER}
 ADMIN_SECRET_FILE=${SECRETS_FILE}
+BACKUP=${BACKUP_FILE}.gz
 PRODUCT_VIEWS=frente,verso,lateral,detalhe,mockup
-MERCADO_PAGO=plugin-ativo-credenciais-da-conta-necessarias
-PAYPAL=plugin-ativo-conexao-da-conta-necessaria
-MELHOR_ENVIO=plugin-ativo-token-da-conta-necessario
+PRODUCT_CATEGORIES=camisetas,bones,adesivos
+PRODUCT_ATTRIBUTES=tamanho,cor
+MERCADO_PAGO_PLUGIN=${MP_ACTIVE}
+PAYPAL_PLUGIN=${PAYPAL_ACTIVE}
+MELHOR_ENVIO_PLUGIN=${MELHOR_ENVIO_ACTIVE}
+EXTERNAL_ACCOUNTS=autorizacao-das-contas-ainda-necessaria-para-transacoes-reais
 SSL=${SSL_STATUS}
-HTTP_LOCAL=${HTTP_STATUS}
+HTTP_HOME=${HOME_STATUS}
+HTTP_SHOP=${SHOP_STATUS}
+HTTP_CART=${CART_STATUS}
+HTTP_CHECKOUT=${CHECKOUT_STATUS}
+HTTP_ACCOUNT=${ACCOUNT_STATUS}
 MAIN_SITE_TOUCHED=nao
 ============================================================
 EOF
