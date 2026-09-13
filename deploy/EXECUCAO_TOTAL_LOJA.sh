@@ -224,7 +224,7 @@ for code in "$HOME_STATUS" "$SHOP_STATUS" "$CART_STATUS" "$CHECKOUT_STATUS" "$AC
   [[ "$code" =~ ^[23][0-9][0-9]$ ]] || fail "Uma URL crítica da loja não respondeu corretamente (HTTP=$code)."
 done
 
-plugin_version(){ run_wp plugin get "$1" --field=version 2>/dev/null | tail -n1; }
+plugin_version(){ run_wp_safe plugin get "$1" --field=version 2>/dev/null | tail -n1; }
 WC_VERSION="$(plugin_version woocommerce)"
 ELEMENTOR_VERSION_INSTALLED="$(plugin_version elementor)"
 MP_VERSION="$(plugin_version woocommerce-mercadopago)"
@@ -232,7 +232,10 @@ PAYPAL_VERSION="$(plugin_version woocommerce-paypal-payments)"
 ME_VERSION="$(plugin_version melhor-envio-cotacao)"
 CORE_VERSION="$(plugin_version belastock-core)"
 CARDS_VERSION="$(plugin_version belastock-shop-cards)"
-OUTDATED_PLUGINS="$(run_wp plugin list --update=available --field=name 2>/dev/null | paste -sd, - || true)"
+OUTDATED_PLUGINS="$(run_wp_safe plugin list --update=available --field=name 2>/dev/null | paste -sd, - || true)"
+ELEMENTOR_PRO_VERSION="$(run_wp_safe plugin get elementor-pro --field=version 2>/dev/null | tail -n1 || true)"
+ELEMENTOR_PRO_UPDATE="nao"
+if run_wp_safe plugin list --update=available --field=name 2>/dev/null | grep -qx elementor-pro; then ELEMENTOR_PRO_UPDATE="sim-pacote-indisponivel-no-updater"; fi
 
 cat <<EOF
 ============================================================
@@ -244,6 +247,8 @@ BACKUP=${BACKUP_FILE}.gz
 WORDPRESS=ok
 WOOCOMMERCE=${WC_VERSION}
 ELEMENTOR=${ELEMENTOR_VERSION_INSTALLED}
+ELEMENTOR_PRO=${ELEMENTOR_PRO_VERSION:-nao-instalado}
+ELEMENTOR_PRO_UPDATE=${ELEMENTOR_PRO_UPDATE}
 MERCADO_PAGO=${MP_VERSION}
 PAYPAL=${PAYPAL_VERSION}
 MELHOR_ENVIO=${ME_VERSION}
