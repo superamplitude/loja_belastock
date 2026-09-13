@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Bela Stock Core
  * Description: Campos e visualização de frente, verso, lateral, detalhe e mockup para produtos WooCommerce.
- * Version: 1.0.0
+ * Version: 1.0.1
  * Author: Bela Stock
  */
 
@@ -37,6 +37,7 @@ final class BelaStock_Core {
     }
 
     public static function sanitize_views($value): array {
+        $value = is_array($value) ? $value : [];
         $clean = [];
         foreach (array_keys(self::VIEWS) as $key) {
             $clean[$key] = isset($value[$key]) ? absint($value[$key]) : 0;
@@ -70,10 +71,38 @@ final class BelaStock_Core {
 
     public static function admin_assets(string $hook): void {
         global $post_type;
-        if ($post_type !== 'product' || !in_array($hook, ['post.php','post-new.php'], true)) return;
+        if ($post_type !== 'product' || !in_array($hook, ['post.php', 'post-new.php'], true)) return;
+
         wp_enqueue_media();
-        wp_add_inline_style('wp-admin', '.belastock-view-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}.belastock-view-card{border:1px solid #ddd;border-radius:10px;padding:12px;background:#fff}.belastock-preview{height:150px;margin:10px 0;background:#f6f6f6;display:flex;align-items:center;justify-content:center;overflow:hidden}.belastock-preview img{width:100%;height:100%;object-fit:cover}');
-        wp_add_inline_script('jquery-core', "jQuery(function($){$('.belastock-pick').on('click',function(){const c=$(this).closest('.belastock-view-card');const f=wp.media({title:'Selecionar imagem',button:{text:'Usar imagem'},multiple:false});f.on('select',function(){const a=f.state().get('selection').first().toJSON();c.find('input[type=hidden]').val(a.id);c.find('.belastock-preview').html('<img src=\"'+a.url+'\" alt=\"\">');});f.open();});$('.belastock-clear').on('click',function(){const c=$(this).closest('.belastock-view-card');c.find('input[type=hidden]').val('');c.find('.belastock-preview').html('<span>Sem imagem</span>');});});");
+        wp_register_style('belastock-core-admin', false, [], '1.0.1');
+        wp_enqueue_style('belastock-core-admin');
+        wp_add_inline_style('belastock-core-admin', '.belastock-view-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:16px}.belastock-view-card{border:1px solid #ddd;border-radius:10px;padding:12px;background:#fff}.belastock-preview{height:150px;margin:10px 0;background:#f6f6f6;display:flex;align-items:center;justify-content:center;overflow:hidden}.belastock-preview img{width:100%;height:100%;object-fit:cover}');
+
+        $script = <<<'JS'
+jQuery(function($){
+    $('.belastock-pick').on('click', function(){
+        const card = $(this).closest('.belastock-view-card');
+        const frame = wp.media({
+            title: 'Selecionar imagem',
+            button: { text: 'Usar imagem' },
+            multiple: false
+        });
+        frame.on('select', function(){
+            const attachment = frame.state().get('selection').first().toJSON();
+            card.find('input[type="hidden"]').val(attachment.id);
+            card.find('.belastock-preview').html('<img src="' + attachment.url + '" alt="">');
+        });
+        frame.open();
+    });
+
+    $('.belastock-clear').on('click', function(){
+        const card = $(this).closest('.belastock-view-card');
+        card.find('input[type="hidden"]').val('');
+        card.find('.belastock-preview').html('<span>Sem imagem</span>');
+    });
+});
+JS;
+        wp_add_inline_script('jquery-core', $script);
     }
 
     public static function save(int $post_id, WP_Post $post): void {
@@ -96,8 +125,8 @@ final class BelaStock_Core {
         }
         if (!$items) return;
         echo '<section class="belastock-views"><h2>Veja todos os ângulos</h2><div class="belastock-views-grid">';
-        foreach ($items as [$label,$id]) {
-            echo '<figure><a href="'.esc_url(wp_get_attachment_image_url($id,'full')).'">'.wp_get_attachment_image($id,'large').'</a><figcaption>'.esc_html($label).'</figcaption></figure>';
+        foreach ($items as [$label, $id]) {
+            echo '<figure><a href="'.esc_url(wp_get_attachment_image_url($id, 'full')).'">'.wp_get_attachment_image($id, 'large').'</a><figcaption>'.esc_html($label).'</figcaption></figure>';
         }
         echo '</div></section>';
     }
