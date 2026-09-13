@@ -1,0 +1,23 @@
+# WordPress runtime
+wordpress/
+wp-config.php
+wp-content/uploads/
+wp-content/cache/
+wp-content/upgrade/
+wp-content/backups/
+
+# Secrets
+.env
+.env.*
+*.key
+*.pem
+*.crt
+
+# OS/editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs
+*.log
