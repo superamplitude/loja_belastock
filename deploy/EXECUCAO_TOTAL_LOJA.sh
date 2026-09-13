@@ -65,8 +65,8 @@ EXISTING_WP="nao"
 if [[ -f "$DOCROOT/wp-config.php" ]]; then
   log "wp-config.php existente detectado; validando exclusivamente o WordPress do subdomínio"
   if run_wp_safe core is-installed >/dev/null 2>&1; then
-    HOME_URL="$(run_wp_safe option get home --format=plaintext 2>/dev/null | tail -n1 | tr -d '\r' || true)"
-    SITE_URL="$(run_wp_safe option get siteurl --format=plaintext 2>/dev/null | tail -n1 | tr -d '\r' || true)"
+    HOME_URL="$(run_wp_safe option get home 2>/dev/null | tail -n1 | tr -d '\r' || true)"
+    SITE_URL="$(run_wp_safe option get siteurl 2>/dev/null | tail -n1 | tr -d '\r' || true)"
     [[ "$HOME_URL" =~ ^https?://loja\.belastock\.com\.br/?$ ]] || fail "WordPress existente aponta HOME para outro endereço: ${HOME_URL:-vazio}"
     [[ "$SITE_URL" =~ ^https?://loja\.belastock\.com\.br/?$ ]] || fail "WordPress existente aponta SITEURL para outro endereço: ${SITE_URL:-vazio}"
     EXISTING_WP="sim"
