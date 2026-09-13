@@ -20,7 +20,6 @@ command -v clpctl >/dev/null 2>&1 || fail "CloudPanel CLI (clpctl) não encontra
 [[ "$SITE_USER" == "belastock" ]] || fail "Trava de usuário acionada."
 [[ "$DOCROOT" == "/home/belastock/htdocs/loja.belastock.com.br" ]] || fail "Trava de diretório acionada."
 
-# Travas rígidas contra qualquer operação no site principal ou em outros vhosts.
 FORBIDDEN=(
   "/home/belastock/htdocs/belastock.com.br"
   "/home/belastock/htdocs/www.belastock.com.br"
@@ -30,27 +29,20 @@ for p in "${FORBIDDEN[@]}"; do
   [[ "$DOCROOT" != "$p" ]] || fail "Deploy recusado: caminho do site principal."
 done
 
-# O subdomínio já existe no CloudPanel. Não criar, mover ou recriar vhost.
 [[ -d "$DOCROOT" ]] || fail "Subdomínio existente não encontrado no caminho esperado: $DOCROOT"
 OWNER="$(stat -c '%U' "$DOCROOT")"
 [[ "$OWNER" == "$SITE_USER" ]] || fail "Dono inesperado do subdomínio: $OWNER"
 
-# Recusar caso o mesmo domínio apareça em outro caminho.
 mapfile -t EXISTING_PATHS < <(find /home -mindepth 3 -maxdepth 3 -type d -path "*/htdocs/${DOMAIN}" 2>/dev/null || true)
 for p in "${EXISTING_PATHS[@]:-}"; do
   [[ -z "$p" || "$p" == "$DOCROOT" ]] || fail "O domínio também existe em outro caminho: $p"
 done
 
-# Se já houver um WordPress não criado por este deploy, não assumir controle.
-if [[ -f "$DOCROOT/wp-config.php" && ! -f "$SECRETS_FILE" ]]; then
-  fail "WordPress existente sem arquivo local de credenciais. Nenhuma alteração foi feita."
-fi
-
 if [[ ! -f "$SECRETS_FILE" ]]; then
   log "Gerando credenciais locais exclusivas da loja (não entram no GitHub)"
   umask 077
   DB_PASSWORD="$(openssl rand -hex 18)"
-  ADMIN_PASSWORD="$(openssl rand -base64 24 | tr -dc 'A-Za-z0-9!@#%+=' | head -c 24)"
+  ADMIN_PASSWORD="$(openssl rand -base64 30 | tr -dc 'A-Za-z0-9!@#%+=' | head -c 24)"
   cat > "$SECRETS_FILE" <<EOF
 DB_PASSWORD=${DB_PASSWORD}
 ADMIN_PASSWORD=${ADMIN_PASSWORD}
@@ -68,9 +60,22 @@ fi
 
 run_wp(){ sudo -u "$SITE_USER" -H wp --path="$DOCROOT" "$@"; }
 
-if [[ ! -f "$DOCROOT/wp-config.php" ]]; then
-  log "Criando banco dedicado da loja"
-  if ! mysql -NBe "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='${DB_NAME}'" | grep -qx "$DB_NAME"; then
+EXISTING_WP="nao"
+if [[ -f "$DOCROOT/wp-config.php" ]]; then
+  log "wp-config.php existente detectado; validando exclusivamente o WordPress do subdomínio"
+  if run_wp core is-installed >/dev/null 2>&1; then
+    HOME_URL="$(run_wp option get home --format=plaintext 2>/dev/null || true)"
+    SITE_URL="$(run_wp option get siteurl --format=plaintext 2>/dev/null || true)"
+    [[ "$HOME_URL" =~ ^https?://loja\.belastock\.com\.br/?$ ]] || fail "WordPress existente aponta HOME para outro endereço: ${HOME_URL:-vazio}"
+    [[ "$SITE_URL" =~ ^https?://loja\.belastock\.com\.br/?$ ]] || fail "WordPress existente aponta SITEURL para outro endereço: ${SITE_URL:-vazio}"
+    EXISTING_WP="sim"
+    log "WordPress existente validado como ${DOMAIN}; adoção segura autorizada pelas travas."
+  else
+    log "wp-config.php existe, mas o WordPress ainda não está instalado. Será concluído usando a configuração existente."
+  fi
+else
+  log "Nenhum wp-config.php encontrado; preparando WordPress novo apenas no subdomínio"
+  if ! mysql -NBe "SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME='${DB_NAME}'" 2>/dev/null | grep -qx "$DB_NAME"; then
     clpctl db:add \
       --domainName="$DOMAIN" \
       --databaseName="$DB_NAME" \
@@ -78,7 +83,6 @@ if [[ ! -f "$DOCROOT/wp-config.php" ]]; then
       --databaseUserPassword="$DB_PASSWORD"
   fi
 
-  log "Baixando WordPress pt-BR somente no subdomínio"
   sudo -u "$SITE_USER" -H wp core download --path="$DOCROOT" --locale=pt_BR --force
   run_wp config create --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASSWORD" --dbhost="127.0.0.1" --dbcharset="utf8mb4" --skip-check
   run_wp config set DISALLOW_FILE_EDIT true --raw
@@ -94,6 +98,17 @@ if ! run_wp core is-installed >/dev/null 2>&1; then
     --admin_password="$ADMIN_PASSWORD" \
     --admin_email="$ADMIN_EMAIL" \
     --skip-email
+else
+  log "WordPress já instalado; preservando banco e conteúdo existentes."
+fi
+
+# Garante um administrador dedicado da loja, sem depender de credenciais antigas.
+if run_wp user get "$ADMIN_USER" --field=ID >/dev/null 2>&1; then
+  log "Atualizando senha do administrador dedicado da loja"
+  run_wp user update "$ADMIN_USER" --user_pass="$ADMIN_PASSWORD" --role=administrator >/dev/null
+else
+  log "Criando administrador dedicado da loja"
+  run_wp user create "$ADMIN_USER" "$ADMIN_EMAIL" --role=administrator --user_pass="$ADMIN_PASSWORD" >/dev/null
 fi
 
 log "Sincronizando somente tema e plugin próprios da loja"
@@ -131,8 +146,10 @@ for spec in "Camisetas:camisetas" "Bonés:bones" "Adesivos:adesivos"; do
   fi
 done
 
-# Remover apenas conteúdo padrão do WordPress, nunca produtos do usuário.
-run_wp post delete 1 --force >/dev/null 2>&1 || true
+# Remover somente o post padrão se ele ainda for o Hello World.
+if [[ "$(run_wp post get 1 --field=post_name 2>/dev/null || true)" == "hello-world" ]]; then
+  run_wp post delete 1 --force >/dev/null 2>&1 || true
+fi
 
 log "Ajustando permissões somente do subdomínio"
 chown -R "$SITE_USER:$SITE_USER" "$DOCROOT"
@@ -165,16 +182,18 @@ cat <<EOF
 ============================================================
 DOMAIN=https://${DOMAIN}
 DOCROOT=${DOCROOT}
+EXISTING_WORDPRESS_ADOPTED=${EXISTING_WP}
 WORDPRESS=ok
 WOOCOMMERCE=ok
 THEME=belastock-store
+ADMIN_USER=${ADMIN_USER}
+ADMIN_SECRET_FILE=${SECRETS_FILE}
 PRODUCT_VIEWS=frente,verso,lateral,detalhe,mockup
 MERCADO_PAGO=plugin-ativo-credenciais-da-conta-necessarias
 PAYPAL=plugin-ativo-conexao-da-conta-necessaria
 MELHOR_ENVIO=plugin-ativo-token-da-conta-necessario
 SSL=${SSL_STATUS}
 HTTP_LOCAL=${HTTP_STATUS}
-SECRETS=${SECRETS_FILE}
 MAIN_SITE_TOUCHED=nao
 ============================================================
 EOF
