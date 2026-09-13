@@ -137,12 +137,12 @@ run_wp_safe option update woocommerce_dimension_unit 'cm'
 run_wp_safe option update woocommerce_enable_guest_checkout 'yes'
 run_wp_safe option update woocommerce_calc_taxes 'yes'
 run_wp eval 'if (class_exists("WC_Install")) { WC_Install::create_pages(); }'
-run_wp_safe rewrite flush
+run_wp rewrite flush
 
 for spec in "Camisetas:camisetas" "Bonés:bones" "Adesivos:adesivos"; do
   NAME="${spec%%:*}"; SLUG="${spec##*:}"
-  if ! run_wp_safe term get product_cat "$SLUG" --by=slug --field=term_id >/dev/null 2>&1; then
-    run_wp_safe term create product_cat "$NAME" --slug="$SLUG" >/dev/null
+  if ! run_wp term get product_cat "$SLUG" --by=slug --field=term_id >/dev/null 2>&1; then
+    run_wp term create product_cat "$NAME" --slug="$SLUG" >/dev/null
   fi
 done
 
