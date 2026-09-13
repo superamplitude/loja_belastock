@@ -43,23 +43,31 @@ else
   echo "[1/5] Runner já extraído em ${RUNNER_DIR}."
 fi
 
-if [[ -x ./bin/installdependencies.sh ]]; then
-  echo "[2/5] Verificando dependências do sistema..."
+if ./bin/Runner.Listener --version >/dev/null 2>&1; then
+  echo "[2/5] Dependências já estão OK. Nada será reinstalado."
+elif [[ -x ./bin/installdependencies.sh ]]; then
+  echo "[2/5] Instalando dependências necessárias..."
   ./bin/installdependencies.sh || true
+  ./bin/Runner.Listener --version >/dev/null 2>&1 || {
+    echo "ERRO: dependências do runner ainda não estão válidas."
+    exit 1
+  }
 fi
 
 if [[ -f .runner ]]; then
-  echo "ERRO: este diretório já contém um runner configurado."
-  echo "Diretório: ${RUNNER_DIR}"
-  echo "Não vou sobrescrever uma configuração existente automaticamente."
-  exit 2
+  echo "Runner já configurado em ${RUNNER_DIR}."
+  if [[ -x ./svc.sh ]]; then
+    ./svc.sh start || true
+    ./svc.sh status || true
+  fi
+  exit 0
 fi
 
 printf "Cole o NOVO token de registro do runner do GitHub e pressione Enter: "
 read -r -s RUNNER_TOKEN
 echo
 if [[ -z "${RUNNER_TOKEN}" ]]; then
-  echo "Token vazio. Abortando."
+  echo "Token vazio. Abortando sem alterar a configuração."
   exit 1
 fi
 
