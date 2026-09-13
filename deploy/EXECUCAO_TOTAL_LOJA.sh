@@ -59,13 +59,14 @@ if ! command -v wp >/dev/null 2>&1; then
 fi
 
 run_wp(){ sudo -u "$SITE_USER" -H wp --path="$DOCROOT" "$@"; }
+run_wp_safe(){ sudo -u "$SITE_USER" -H wp --path="$DOCROOT" --skip-plugins --skip-themes "$@"; }
 
 EXISTING_WP="nao"
 if [[ -f "$DOCROOT/wp-config.php" ]]; then
   log "wp-config.php existente detectado; validando exclusivamente o WordPress do subdomínio"
-  if run_wp core is-installed >/dev/null 2>&1; then
-    HOME_URL="$(run_wp option get home --format=plaintext 2>/dev/null || true)"
-    SITE_URL="$(run_wp option get siteurl --format=plaintext 2>/dev/null || true)"
+  if run_wp_safe core is-installed >/dev/null 2>&1; then
+    HOME_URL="$(run_wp_safe option get home --format=plaintext 2>/dev/null | tail -n1 | tr -d '\r' || true)"
+    SITE_URL="$(run_wp_safe option get siteurl --format=plaintext 2>/dev/null | tail -n1 | tr -d '\r' || true)"
     [[ "$HOME_URL" =~ ^https?://loja\.belastock\.com\.br/?$ ]] || fail "WordPress existente aponta HOME para outro endereço: ${HOME_URL:-vazio}"
     [[ "$SITE_URL" =~ ^https?://loja\.belastock\.com\.br/?$ ]] || fail "WordPress existente aponta SITEURL para outro endereço: ${SITE_URL:-vazio}"
     EXISTING_WP="sim"
@@ -84,14 +85,14 @@ else
   fi
 
   sudo -u "$SITE_USER" -H wp core download --path="$DOCROOT" --locale=pt_BR --force
-  run_wp config create --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASSWORD" --dbhost="127.0.0.1" --dbcharset="utf8mb4" --skip-check
-  run_wp config set DISALLOW_FILE_EDIT true --raw
-  run_wp config set WP_AUTO_UPDATE_CORE minor
+  run_wp_safe config create --dbname="$DB_NAME" --dbuser="$DB_USER" --dbpass="$DB_PASSWORD" --dbhost="127.0.0.1" --dbcharset="utf8mb4" --skip-check
+  run_wp_safe config set DISALLOW_FILE_EDIT true --raw
+  run_wp_safe config set WP_AUTO_UPDATE_CORE minor
 fi
 
-if ! run_wp core is-installed >/dev/null 2>&1; then
+if ! run_wp_safe core is-installed >/dev/null 2>&1; then
   log "Instalando WordPress da loja"
-  run_wp core install \
+  run_wp_safe core install \
     --url="https://${DOMAIN}" \
     --title="Bela Stock — Loja" \
     --admin_user="$ADMIN_USER" \
@@ -102,13 +103,12 @@ else
   log "WordPress já instalado; preservando banco e conteúdo existentes."
 fi
 
-# Garante um administrador dedicado da loja, sem depender de credenciais antigas.
-if run_wp user get "$ADMIN_USER" --field=ID >/dev/null 2>&1; then
+if run_wp_safe user get "$ADMIN_USER" --field=ID >/dev/null 2>&1; then
   log "Atualizando senha do administrador dedicado da loja"
-  run_wp user update "$ADMIN_USER" --user_pass="$ADMIN_PASSWORD" --role=administrator >/dev/null
+  run_wp_safe user update "$ADMIN_USER" --user_pass="$ADMIN_PASSWORD" --role=administrator >/dev/null
 else
   log "Criando administrador dedicado da loja"
-  run_wp user create "$ADMIN_USER" "$ADMIN_EMAIL" --role=administrator --user_pass="$ADMIN_PASSWORD" >/dev/null
+  run_wp_safe user create "$ADMIN_USER" "$ADMIN_EMAIL" --role=administrator --user_pass="$ADMIN_PASSWORD" >/dev/null
 fi
 
 log "Sincronizando somente tema e plugin próprios da loja"
@@ -126,29 +126,28 @@ run_wp plugin activate belastock-core
 run_wp theme activate belastock-store
 
 log "Configurando WooCommerce Brasil"
-run_wp option update blogname "Bela Stock — Loja"
-run_wp option update blogdescription "Camisetas, bonés e adesivos"
-run_wp option update timezone_string "America/Sao_Paulo"
-run_wp option update permalink_structure '/%postname%/'
-run_wp option update woocommerce_currency 'BRL'
-run_wp option update woocommerce_default_country 'BR'
-run_wp option update woocommerce_weight_unit 'kg'
-run_wp option update woocommerce_dimension_unit 'cm'
-run_wp option update woocommerce_enable_guest_checkout 'yes'
-run_wp option update woocommerce_calc_taxes 'yes'
+run_wp_safe option update blogname "Bela Stock — Loja"
+run_wp_safe option update blogdescription "Camisetas, bonés e adesivos"
+run_wp_safe option update timezone_string "America/Sao_Paulo"
+run_wp_safe option update permalink_structure '/%postname%/'
+run_wp_safe option update woocommerce_currency 'BRL'
+run_wp_safe option update woocommerce_default_country 'BR'
+run_wp_safe option update woocommerce_weight_unit 'kg'
+run_wp_safe option update woocommerce_dimension_unit 'cm'
+run_wp_safe option update woocommerce_enable_guest_checkout 'yes'
+run_wp_safe option update woocommerce_calc_taxes 'yes'
 run_wp eval 'if (class_exists("WC_Install")) { WC_Install::create_pages(); }'
-run_wp rewrite flush
+run_wp_safe rewrite flush
 
 for spec in "Camisetas:camisetas" "Bonés:bones" "Adesivos:adesivos"; do
   NAME="${spec%%:*}"; SLUG="${spec##*:}"
-  if ! run_wp term get product_cat "$SLUG" --by=slug --field=term_id >/dev/null 2>&1; then
-    run_wp term create product_cat "$NAME" --slug="$SLUG" >/dev/null
+  if ! run_wp_safe term get product_cat "$SLUG" --by=slug --field=term_id >/dev/null 2>&1; then
+    run_wp_safe term create product_cat "$NAME" --slug="$SLUG" >/dev/null
   fi
 done
 
-# Remover somente o post padrão se ele ainda for o Hello World.
-if [[ "$(run_wp post get 1 --field=post_name 2>/dev/null || true)" == "hello-world" ]]; then
-  run_wp post delete 1 --force >/dev/null 2>&1 || true
+if [[ "$(run_wp_safe post get 1 --field=post_name 2>/dev/null | tail -n1 || true)" == "hello-world" ]]; then
+  run_wp_safe post delete 1 --force >/dev/null 2>&1 || true
 fi
 
 log "Ajustando permissões somente do subdomínio"
@@ -166,10 +165,10 @@ else
 fi
 
 log "Verificação final"
-run_wp core is-installed
-run_wp plugin is-active woocommerce
-run_wp plugin is-active belastock-core
-run_wp theme is-active belastock-store
+run_wp_safe core is-installed
+run_wp_safe plugin is-active woocommerce
+run_wp_safe plugin is-active belastock-core
+run_wp_safe theme is-active belastock-store
 
 HTTP_STATUS="$(curl -L -k -sS --max-time 12 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}/" || true)"
 if [[ "$HTTP_STATUS" == "000" ]]; then
