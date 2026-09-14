@@ -1,0 +1,77 @@
+name: Fix Mockup Studio Pro Media Upload
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-media-fix-trigger'
+
+concurrency:
+  group: belastock-msp-media-fix
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Patch media hook safely and verify upload
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          FILE="$DOCROOT/wp-content/plugins/mockup-studio-pro/includes/class-msp-image-optimizer.php"
+          BACKUP="/home/belastock/backups/mockup-studio-pro/class-msp-image-optimizer.php.$(date +%Y%m%d_%H%M%S).bak"
+          mkdir -p "$(dirname "$BACKUP")"
+          test -f "$FILE"
+          cp -a "$FILE" "$BACKUP"
+          echo "BACKUP=$BACKUP"
+
+          python3 - "$FILE" <<'PY'
+from pathlib import Path
+import sys
+p = Path(sys.argv[1])
+s = p.read_text()
+old = "public function check_svg_filetype(array $data, string $file, string $filename, array $mimes, $real_mime = null): array {"
+new = "public function check_svg_filetype(array $data, string $file, string $filename, ?array $mimes = null, $real_mime = null): array {"
+if new in s:
+    print('PATCH_ALREADY_PRESENT=YES')
+elif old in s:
+    p.write_text(s.replace(old, new, 1))
+    print('PATCH_APPLIED=YES')
+else:
+    raise SystemExit('Assinatura esperada nao encontrada; abortando sem alteracao adicional.')
+PY
+
+          php -l "$FILE"
+          grep -n 'function check_svg_filetype' "$FILE"
+          chown belastock:belastock "$FILE"
+          chmod 0644 "$FILE"
+
+          systemctl reload php8.3-fpm || systemctl restart php8.3-fpm
+
+          TESTFILE=/tmp/belastock-media-fix-test-3000x1800.jpg
+          php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,255,255,255);imagefill($im,0,0,$w);imagejpeg($im,"/tmp/belastock-media-fix-test-3000x1800.jpg",88);imagedestroy($im);'
+          ATTACH_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTFILE" --title='Bela Stock Media Fix Test' --porcelain 2>/tmp/bs-media-fix.err || true)"
+          echo "ATTACH_ID=$ATTACH_ID"
+          cat /tmp/bs-media-fix.err || true
+          if ! [[ "$ATTACH_ID" =~ ^[0-9]+$ ]]; then
+            cp -a "$BACKUP" "$FILE"
+            chown belastock:belastock "$FILE"
+            chmod 0644 "$FILE"
+            systemctl reload php8.3-fpm || true
+            echo 'TESTE FALHOU; ROLLBACK APLICADO.' >&2
+            exit 1
+          fi
+
+          sudo -u belastock -H wp --path="$DOCROOT" post meta get "$ATTACH_ID" _wp_attachment_metadata >/tmp/bs-media-meta.txt
+          test -s /tmp/bs-media-meta.txt
+          sudo -u belastock -H wp --path="$DOCROOT" post delete "$ATTACH_ID" --force >/dev/null
+          rm -f "$TESTFILE"
+
+          LOGIN_CODE="$(curl -kLsS --max-redirs 5 --max-time 20 --resolve 'loja.belastock.com.br:443:127.0.0.1' -o /dev/null -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php')"
+          echo "WP_LOGIN_HTTP=$LOGIN_CODE"
+          test "$LOGIN_CODE" = 200
+          echo 'MEDIA_UPLOAD_FIX=100%_OK'
