@@ -16,33 +16,44 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Inspect nginx and WordPress routing
+      - name: Inspect backend and nginx routing
         shell: bash
         run: |
           set -euo pipefail
           DOMAIN="loja.belastock.com.br"
           DOCROOT="/home/belastock/htdocs/${DOMAIN}"
-          echo '=== WP OPTIONS ==='
+          echo '=== WORDPRESS ==='
           sudo -u belastock -H wp --path="$DOCROOT" option get home || true
           sudo -u belastock -H wp --path="$DOCROOT" option get siteurl || true
-          sudo -u belastock -H wp --path="$DOCROOT" option get permalink_structure || true
-          echo '=== PAGE IDS/SLUGS ==='
-          for opt in woocommerce_shop_page_id woocommerce_cart_page_id woocommerce_checkout_page_id woocommerce_myaccount_page_id; do
-            id="$(sudo -u belastock -H wp --path="$DOCROOT" option get "$opt" 2>/dev/null || true)"
-            echo "$opt=$id"
-            if [[ "$id" =~ ^[0-9]+$ ]]; then sudo -u belastock -H wp --path="$DOCROOT" post get "$id" --fields=ID,post_name,post_status,post_type --format=json || true; fi
+          echo -n 'permalink='; sudo -u belastock -H wp --path="$DOCROOT" option get permalink_structure || true
+          sudo -u belastock -H wp --path="$DOCROOT" post list --post_type=product --post_status=publish --format=count || true
+          echo '=== PORT 3210 ==='
+          ss -lntp | grep ':3210' || true
+          pid="$(ss -lntp 2>/dev/null | sed -n 's/.*:3210 .*pid=\([0-9][0-9]*\).*/\1/p' | head -1)"
+          echo "PID=${pid:-none}"
+          if [[ -n "${pid:-}" ]]; then
+            ps -fp "$pid" || true
+            tr '\0' ' ' < "/proc/$pid/cmdline" || true; echo
+            readlink -f "/proc/$pid/exe" || true
+            readlink -f "/proc/$pid/cwd" || true
+            cat "/proc/$pid/cgroup" || true
+          fi
+          echo '=== SYSTEMD CANDIDATES ==='
+          systemctl list-units --type=service --all --no-pager | grep -Ei 'belastock|3210|php|node|apache|caddy' | head -100 || true
+          echo '=== PHP FPM ==='
+          find /run /var/run -maxdepth 3 -type s \( -name '*php*' -o -name '*fpm*' \) -print 2>/dev/null | sort -u || true
+          systemctl list-units --type=service --all --no-pager | grep -E 'php.*fpm' || true
+          echo '=== NGINX DOMAIN ==='
+          cat "/etc/nginx/sites-enabled/${DOMAIN}.conf" || true
+          echo '=== OTHER PHP VHOST EXAMPLES ==='
+          grep -RIl --include='*.conf' 'fastcgi_pass' /etc/nginx/sites-enabled 2>/dev/null | head -5 | while read -r f; do echo "--- $f"; grep -n -E 'server_name|root |index |try_files|fastcgi_pass|include.*php' "$f" | head -80; done || true
+          echo '=== BACKEND HTTP 3210 ==='
+          for path in / /loja/ /loja/index.php '/?page_id=7' /wp-login.php /wp-admin/ /wp-json/; do
+            code="$(curl -sS --max-time 10 -o /tmp/bsbody -w '%{http_code}' -H "Host: ${DOMAIN}" "http://127.0.0.1:3210${path}" || true)"
+            echo "$path=$code body=$(head -c 80 /tmp/bsbody | tr '\n' ' ')"
           done
-          echo '=== NGINX CONFIG FILES ==='
-          grep -RIl --include='*.conf' "$DOMAIN" /etc/nginx 2>/dev/null | head -20 || true
-          echo '=== NGINX SERVER BLOCK EXCERPTS ==='
-          nginx -T 2>/dev/null | awk -v d="$DOMAIN" 'BEGIN{n=0} index($0,d){n=100} n>0{print;n--}' | head -300 || true
-          echo '=== DOCROOT ==='
-          ls -la "$DOCROOT" | head -50
-          echo '=== INDEX/HTACCESS ==='
-          test -f "$DOCROOT/index.php" && sed -n '1,60p' "$DOCROOT/index.php" || true
-          test -f "$DOCROOT/.htaccess" && cat "$DOCROOT/.htaccess" || true
-          echo '=== HTTP ==='
-          for path in / /loja/ '/?page_id=5' /index.php/loja/ /wp-json/; do
+          echo '=== PUBLIC HTTP ==='
+          for path in / /loja/ /loja/index.php '/?page_id=7' /wp-login.php /wp-admin/; do
             code="$(curl -L -k -sS --max-time 10 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}" || true)"
             echo "$path=$code"
           done

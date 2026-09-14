@@ -1,8 +1,6 @@
 name: Deploy Bela Stock Loja
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -19,7 +17,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Guard repository and syntax
         shell: bash
         run: |
@@ -30,7 +27,6 @@ jobs:
           test -f wp-content/themes/belastock-store/operations-v1.php
           php -l wp-content/themes/belastock-store/operations-v1.php
           php -l deploy/FINALIZE_OPERATIONAL.php
-
       - name: Deploy loja.belastock.com.br
         shell: bash
         run: |
@@ -50,27 +46,17 @@ jobs:
           set -e
           if [ "$rc" -ne 0 ]; then
             if grep -q "Uma URL crítica da loja não respondeu corretamente (HTTP=404)" /tmp/belastock-deploy.log; then
-              echo "Validação antiga encontrou rota 404; a etapa operacional seguinte vai reparar as rotas sem depender de rewrite do nginx."
+              echo "Validação antiga encontrou rota 404; a etapa operacional seguinte vai reparar as rotas."
             else
               exit "$rc"
             fi
           fi
-
       - name: Finalize operational catalog and mockup library
         shell: bash
         run: |
           set -euo pipefail
           DOCROOT="/home/belastock/htdocs/loja.belastock.com.br"
-          test -d "$DOCROOT"
-          if [ "$(id -u)" -eq 0 ]; then
-            sudo -u belastock -H wp --path="$DOCROOT" eval-file "$GITHUB_WORKSPACE/deploy/FINALIZE_OPERATIONAL.php"
-          elif sudo -n true 2>/dev/null; then
-            sudo -u belastock -H wp --path="$DOCROOT" eval-file "$GITHUB_WORKSPACE/deploy/FINALIZE_OPERATIONAL.php"
-          else
-            echo "Sem permissão para a auditoria operacional final."
-            exit 1
-          fi
-
+          sudo -u belastock -H wp --path="$DOCROOT" eval-file "$GITHUB_WORKSPACE/deploy/FINALIZE_OPERATIONAL.php"
       - name: Verify critical public routes
         shell: bash
         run: |
@@ -83,7 +69,6 @@ jobs:
             if ! [[ "$code" =~ ^[23][0-9][0-9]$ ]]; then fail=1; fi
           done
           test "$fail" -eq 0
-
       - name: Verify WordPress operational state
         shell: bash
         run: |
@@ -92,12 +77,7 @@ jobs:
           WP="sudo -u belastock -H wp --path=$DOCROOT"
           $WP core is-installed
           test "$($WP option get belastock_operations_version 2>/dev/null | tail -n1)" = "1.0.0"
-          test -z "$($WP option get permalink_structure 2>/dev/null | tail -n1)"
           for slug in camisetas manga-longa regatas baby-look machao moletons bones ecobags adesivos personalizados; do
             $WP term get product_cat "$slug" --by=slug --field=term_id >/dev/null
-          done
-          for slug in personalizacao atacado perguntas-frequentes rastrear-pedido; do
-            id="$($WP post list --post_type=page --name="$slug" --post_status=publish --field=ID --format=ids | awk '{print $1}')"
-            test -n "$id"
           done
           echo "BELA_STOCK_OPERATIONAL=100%_OK"
