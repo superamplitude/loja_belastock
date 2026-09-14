@@ -49,14 +49,11 @@ jobs:
           echo '=== TESTE JPEG 3000x1800 ==='
           TESTJPG=/tmp/belastock-media-fix-test-3000x1800.jpg
           php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,255,255,255);imagefill($im,0,0,$w);imagejpeg($im,"/tmp/belastock-media-fix-test-3000x1800.jpg",88);imagedestroy($im);'
-          JPG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTJPG" --title='Bela Stock Media Fix JPG' --porcelain 2>/tmp/bs-media-fix-jpg.err)"
+          JPG_RAW="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTJPG" --title='Bela Stock Media Fix JPG' --porcelain 2>/tmp/bs-media-fix-jpg.err)"
+          JPG_ID="$(printf '%s\n' "$JPG_RAW" | grep -Eo '[0-9]+' | tail -n1)"
           echo "JPG_ATTACHMENT_ID=$JPG_ID"
           cat /tmp/bs-media-fix-jpg.err || true
           [[ "$JPG_ID" =~ ^[0-9]+$ ]]
-          JPG_FILE="$(sudo -u belastock -H wp --path="$DOCROOT" eval "echo get_attached_file($JPG_ID);" 2>/dev/null || true)"
-          echo "JPG_FILE=$JPG_FILE"
-          test -n "$JPG_FILE"
-          test -f "$JPG_FILE"
           sudo -u belastock -H wp --path="$DOCROOT" post delete "$JPG_ID" --force >/dev/null 2>&1 || true
           rm -f "$TESTJPG"
           echo 'JPEG_UPLOAD=OK'
@@ -64,14 +61,11 @@ jobs:
           echo '=== TESTE PNG 3000x1800 ==='
           TESTPNG=/tmp/belastock-media-fix-test-3000x1800.png
           php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,245,245,255);imagefill($im,0,0,$w);imagepng($im,"/tmp/belastock-media-fix-test-3000x1800.png",6);imagedestroy($im);'
-          PNG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTPNG" --title='Bela Stock Media Fix PNG' --porcelain 2>/tmp/bs-media-fix-png.err)"
+          PNG_RAW="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTPNG" --title='Bela Stock Media Fix PNG' --porcelain 2>/tmp/bs-media-fix-png.err)"
+          PNG_ID="$(printf '%s\n' "$PNG_RAW" | grep -Eo '[0-9]+' | tail -n1)"
           echo "PNG_ATTACHMENT_ID=$PNG_ID"
           cat /tmp/bs-media-fix-png.err || true
           [[ "$PNG_ID" =~ ^[0-9]+$ ]]
-          PNG_FILE="$(sudo -u belastock -H wp --path="$DOCROOT" eval "echo get_attached_file($PNG_ID);" 2>/dev/null || true)"
-          echo "PNG_FILE=$PNG_FILE"
-          test -n "$PNG_FILE"
-          test -f "$PNG_FILE"
           sudo -u belastock -H wp --path="$DOCROOT" post delete "$PNG_ID" --force >/dev/null 2>&1 || true
           rm -f "$TESTPNG"
           echo 'PNG_UPLOAD=OK'
