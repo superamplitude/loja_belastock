@@ -1,0 +1,23 @@
+name: Inspect MSP Save Code
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-save-code-trigger'
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 8
+    permissions:
+      contents: read
+    steps:
+      - name: Print save and metabox source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          echo '=== EDITOR 1-205 ==='; nl -ba "$P/assets/js/editor.js" | sed -n '1,205p'
+          echo '=== EDITOR 610-760 ==='; nl -ba "$P/assets/js/editor.js" | sed -n '610,760p'
+          echo '=== CLASS 230-430 ==='; nl -ba "$P/includes/class-msp-plugin.php" | sed -n '230,430p'
