@@ -1,0 +1,42 @@
+name: Diagnose Bela Stock Routing
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Inspect nginx and WordPress routing
+        shell: bash
+        run: |
+          set -euo pipefail
+          DOMAIN="loja.belastock.com.br"
+          DOCROOT="/home/belastock/htdocs/${DOMAIN}"
+          echo '=== WP OPTIONS ==='
+          sudo -u belastock -H wp --path="$DOCROOT" option get home || true
+          sudo -u belastock -H wp --path="$DOCROOT" option get siteurl || true
+          sudo -u belastock -H wp --path="$DOCROOT" option get permalink_structure || true
+          echo '=== PAGE IDS/SLUGS ==='
+          for opt in woocommerce_shop_page_id woocommerce_cart_page_id woocommerce_checkout_page_id woocommerce_myaccount_page_id; do
+            id="$(sudo -u belastock -H wp --path="$DOCROOT" option get "$opt" 2>/dev/null || true)"
+            echo "$opt=$id"
+            if [[ "$id" =~ ^[0-9]+$ ]]; then sudo -u belastock -H wp --path="$DOCROOT" post get "$id" --fields=ID,post_name,post_status,post_type --format=json || true; fi
+          done
+          echo '=== NGINX CONFIG FILES ==='
+          grep -RIl --include='*.conf' "$DOMAIN" /etc/nginx /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | head -20 || true
+          echo '=== NGINX SERVER BLOCK EXCERPTS ==='
+          nginx -T 2>/dev/null | awk -v d="$DOMAIN" 'BEGIN{n=0} index($0,d){n=80} n>0{print;n--}' | head -240 || true
+          echo '=== DOCROOT ==='
+          ls -la "$DOCROOT" | head -50
+          echo '=== INDEX/HTACCESS ==='
+          test -f "$DOCROOT/index.php" && sed -n '1,60p' "$DOCROOT/index.php" || true
+          test -f "$DOCROOT/.htaccess" && cat "$DOCROOT/.htaccess" || true
+          echo '=== HTTP ==='
+          for path in / /loja/ /?page_id=1 /index.php/loja/ /wp-json/; do
+            code="$(curl -L -k -sS --max-time 10 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}" || true)"
+            echo "$path=$code"
+          done
