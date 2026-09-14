@@ -1,4 +1,4 @@
-name: Inspect Mockup Studio Pro Bases
+name: Fix Mockup Studio Pro Bases
 
 on:
   push:
@@ -8,43 +8,20 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: belastock-msp-bases-inspect
+  group: belastock-msp-bases-fix
   cancel-in-progress: true
 
 jobs:
-  inspect:
+  fix:
     runs-on: [self-hosted, belastock-loja]
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - name: Inspect plugin base-image logic and product metadata
+      - name: Apply base manager fix
         shell: bash
         run: |
           set -Eeuo pipefail
-          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
-          PLUGIN="$DOCROOT/wp-content/plugins/mockup-studio-pro"
-          test -d "$PLUGIN"
-
-          echo '=== PLUGIN FILES ==='
-          find "$PLUGIN" -maxdepth 3 -type f | sort | sed "s#${DOCROOT}/##"
-
-          echo '=== MATCHES: bases/atributos/remover/adicionar ==='
-          grep -RniE 'Bases por cor|Bases realistas|Adicionar cor|Remover|atribut|variation|base[_ -]?(front|back|image|color)|msp_.*base|color.*base' "$PLUGIN" --include='*.php' --include='*.js' --include='*.css' | head -n 500 || true
-
-          echo '=== AJAX/REST/NONCE/SAVE HANDLERS ==='
-          grep -RniE 'wp_ajax|admin_post|register_rest_route|check_ajax_referer|wp_verify_nonce|update_post_meta|delete_post_meta|add_post_meta|save_post|woocommerce_process_product_meta' "$PLUGIN" --include='*.php' | head -n 500 || true
-
-          echo '=== JS MEDIA/API EVENTS ==='
-          grep -RniE 'wp\.media|ajaxurl|fetch\(|jQuery\.ajax|\.ajax\(|media|remove|delete|base|attribute|variation' "$PLUGIN" --include='*.js' | head -n 500 || true
-
-          echo '=== PRODUCTS ==='
-          sudo -u belastock -H wp --path="$DOCROOT" post list --post_type=product --post_status=any --fields=ID,post_title,post_status --format=table 2>/dev/null | head -n 80 || true
-
-          echo '=== MSP META KEYS ON PRODUCTS ==='
-          sudo -u belastock -H wp --path="$DOCROOT" db query "SELECT p.ID,p.post_title,pm.meta_key,LEFT(pm.meta_value,500) meta_value FROM $(sudo -u belastock -H wp --path="$DOCROOT" db prefix)posts p JOIN $(sudo -u belastock -H wp --path="$DOCROOT" db prefix)postmeta pm ON pm.post_id=p.ID WHERE p.post_type='product' AND (pm.meta_key LIKE '%msp%' OR pm.meta_key LIKE '%mockup%' OR pm.meta_key LIKE '%base%' OR pm.meta_key LIKE '%color%') ORDER BY p.ID,pm.meta_key;" --table 2>/dev/null | head -n 300 || true
-
-          echo '=== PRODUCT ATTRIBUTE TAXONOMIES ==='
-          sudo -u belastock -H wp --path="$DOCROOT" db query "SELECT attribute_id,attribute_name,attribute_label,attribute_type FROM $(sudo -u belastock -H wp --path="$DOCROOT" db prefix)woocommerce_attribute_taxonomies ORDER BY attribute_id;" --table 2>/dev/null || true
-
-          echo '=== DONE ==='
+          curl -fsSL 'https://raw.githubusercontent.com/superamplitude/loja_belastock/main/deploy/fix-msp-base-manager.sh' -o /tmp/fix-msp-base-manager.sh
+          chmod +x /tmp/fix-msp-base-manager.sh
+          bash /tmp/fix-msp-base-manager.sh
