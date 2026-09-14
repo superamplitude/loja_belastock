@@ -1,0 +1,51 @@
+name: Diagnose WordPress Media Upload
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.media-upload-diagnose-trigger'
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-media-diagnose
+  cancel-in-progress: true
+
+jobs:
+  diagnose:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Diagnose media processing
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT="/home/belastock/htdocs/loja.belastock.com.br"
+          echo '=== WORDPRESS ==='
+          sudo -u belastock -H wp --path="$DOCROOT" core version
+          sudo -u belastock -H wp --path="$DOCROOT" option get upload_path || true
+          sudo -u belastock -H wp --path="$DOCROOT" option get upload_url_path || true
+          echo '=== PHP LIMITS ==='
+          /usr/bin/php8.3 -r 'foreach(["memory_limit","upload_max_filesize","post_max_size","max_execution_time","max_input_time","max_file_uploads","upload_tmp_dir"] as $k){echo $k,"=",ini_get($k),PHP_EOL;}'
+          echo '=== PHP MODULES ==='
+          /usr/bin/php8.3 -m | grep -Ei 'gd|imagick|exif|fileinfo|mbstring' || true
+          echo '=== WP IMAGE EDITOR ==='
+          sudo -u belastock -H wp --path="$DOCROOT" eval 'echo "editors="; print_r(wp_image_editors()); echo "jpeg=".(wp_image_editor_supports(["mime_type"=>"image/jpeg"])?"yes":"no")."\n"; echo "png=".(wp_image_editor_supports(["mime_type"=>"image/png"])?"yes":"no")."\n"; echo "webp=".(wp_image_editor_supports(["mime_type"=>"image/webp"])?"yes":"no")."\n";'
+          echo '=== UPLOAD DIR ==='
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$u=wp_upload_dir(); print_r($u);'
+          ls -ld "$DOCROOT/wp-content" "$DOCROOT/wp-content/uploads" 2>/dev/null || true
+          find "$DOCROOT/wp-content/uploads" -maxdepth 2 -type d -printf '%M %u:%g %p\n' 2>/dev/null | tail -30 || true
+          echo '=== DISK ==='
+          df -h "$DOCROOT" /tmp
+          df -i "$DOCROOT" /tmp
+          echo '=== TMP ==='
+          ls -ld /tmp
+          sudo -u belastock -H bash -lc 'touch /tmp/belastock-media-test && rm -f /tmp/belastock-media-test && echo TMP_WRITE=OK'
+          echo '=== RECENT PHP/NGINX ERRORS ==='
+          journalctl -u php8.3-fpm --since '30 minutes ago' --no-pager | tail -120 || true
+          tail -120 /home/lojabelastock/logs/nginx/loja-error.log 2>/dev/null || true
+          tail -120 /var/log/nginx/error.log 2>/dev/null || true
+          echo '=== WP DEBUG LOG ==='
+          tail -120 "$DOCROOT/wp-content/debug.log" 2>/dev/null || true
