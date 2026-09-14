@@ -1,0 +1,23 @@
+name: Inspect Mockup Studio Pro Media Hook
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-inspect-trigger'
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Inspect broken media hook
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          FILE='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro/includes/class-msp-image-optimizer.php'
+          test -f "$FILE"
+          php -l "$FILE"
+          nl -ba "$FILE" | sed -n '80,145p'
