@@ -1,0 +1,29 @@
+name: Inspect MSP Bases Code
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-bases-code-trigger'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Print relevant source sections
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          echo '=== CLASS 120-230 ==='; nl -ba "$P/includes/class-msp-plugin.php" | sed -n '120,230p'
+          echo '=== CLASS 430-950 ==='; nl -ba "$P/includes/class-msp-plugin.php" | sed -n '430,950p'
+          echo '=== EDITOR 200-610 ==='; nl -ba "$P/assets/js/editor.js" | sed -n '200,610p'
+          echo '=== PRODUCT 27 RAW MSP CONFIG ==='
+          sudo -u belastock -H wp --path='/home/belastock/htdocs/loja.belastock.com.br' eval '$v=get_post_meta(27,"_msp_config",true); echo wp_json_encode($v,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE);' 2>/dev/null || true
+          echo
+          echo '=== PRODUCT 27 ATTRIBUTES ==='
+          sudo -u belastock -H wp --path='/home/belastock/htdocs/loja.belastock.com.br' eval '$p=wc_get_product(27); if($p){foreach($p->get_attributes() as $k=>$a){echo $k,"|",($a->is_taxonomy()?"taxonomy":"local"),"|",implode(",",$a->get_options()),"|variation=",($a->get_variation()?"1":"0"),PHP_EOL;}}' 2>/dev/null || true
