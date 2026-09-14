@@ -14,7 +14,7 @@ concurrency:
 jobs:
   diagnose:
     runs-on: [self-hosted, belastock-loja]
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -27,25 +27,57 @@ jobs:
           sudo -u belastock -H wp --path="$DOCROOT" core version
           sudo -u belastock -H wp --path="$DOCROOT" option get upload_path || true
           sudo -u belastock -H wp --path="$DOCROOT" option get upload_url_path || true
+
           echo '=== PHP LIMITS ==='
           /usr/bin/php8.3 -r 'foreach(["memory_limit","upload_max_filesize","post_max_size","max_execution_time","max_input_time","max_file_uploads","upload_tmp_dir"] as $k){echo $k,"=",ini_get($k),PHP_EOL;}'
+
           echo '=== PHP MODULES ==='
           /usr/bin/php8.3 -m | grep -Ei 'gd|imagick|exif|fileinfo|mbstring' || true
-          echo '=== WP IMAGE EDITOR ==='
-          sudo -u belastock -H wp --path="$DOCROOT" eval 'echo "editors="; print_r(wp_image_editors()); echo "jpeg=".(wp_image_editor_supports(["mime_type"=>"image/jpeg"])?"yes":"no")."\n"; echo "png=".(wp_image_editor_supports(["mime_type"=>"image/png"])?"yes":"no")."\n"; echo "webp=".(wp_image_editor_supports(["mime_type"=>"image/webp"])?"yes":"no")."\n";'
+
+          echo '=== WORDPRESS IMAGE SUPPORT ==='
+          sudo -u belastock -H wp --path="$DOCROOT" eval 'require_once ABSPATH."wp-admin/includes/image.php"; require_once ABSPATH."wp-admin/includes/media.php"; require_once ABSPATH."wp-admin/includes/file.php"; foreach(["image/jpeg","image/png","image/webp"] as $m){$e=wp_get_image_editor(ABSPATH."wp-includes/images/media/default.png"); echo $m.": editor=".(is_wp_error($e)?$e->get_error_message():get_class($e))." support=".(wp_image_editor_supports(["mime_type"=>$m])?"yes":"no")."\n";}' || true
+
           echo '=== UPLOAD DIR ==='
           sudo -u belastock -H wp --path="$DOCROOT" eval '$u=wp_upload_dir(); print_r($u);'
           ls -ld "$DOCROOT/wp-content" "$DOCROOT/wp-content/uploads" 2>/dev/null || true
-          find "$DOCROOT/wp-content/uploads" -maxdepth 2 -type d -printf '%M %u:%g %p\n' 2>/dev/null | tail -30 || true
+          find "$DOCROOT/wp-content/uploads" -maxdepth 3 -type d -printf '%M %u:%g %p\n' 2>/dev/null | tail -60 || true
+          echo '=== WRITE TEST ==='
+          sudo -u belastock -H bash -lc "mkdir -p '$DOCROOT/wp-content/uploads/$(date +%Y)/$(date +%m)' && touch '$DOCROOT/wp-content/uploads/$(date +%Y)/$(date +%m)/.write-test' && rm -f '$DOCROOT/wp-content/uploads/$(date +%Y)/$(date +%m)/.write-test' && echo UPLOAD_WRITE=OK"
+
           echo '=== DISK ==='
           df -h "$DOCROOT" /tmp
           df -i "$DOCROOT" /tmp
-          echo '=== TMP ==='
-          ls -ld /tmp
-          sudo -u belastock -H bash -lc 'touch /tmp/belastock-media-test && rm -f /tmp/belastock-media-test && echo TMP_WRITE=OK'
+
+          echo '=== IMAGE LIBRARY INFO ==='
+          convert -version 2>/dev/null | head -5 || magick -version 2>/dev/null | head -5 || true
+          identify -list resource 2>/dev/null | head -30 || true
+          php8.3 -r 'if(class_exists("Imagick")){print_r(Imagick::getResourceLimit(Imagick::RESOURCETYPE_MEMORY)); echo "\n"; print_r(Imagick::getResourceLimit(Imagick::RESOURCETYPE_MAP)); echo "\n";}' || true
+
+          echo '=== SYNTHETIC MEDIA IMPORT TEST ==='
+          TESTFILE=/tmp/belastock-media-test-3000x1800.jpg
+          if command -v convert >/dev/null 2>&1; then
+            convert -size 3000x1800 xc:white -quality 88 "$TESTFILE"
+          elif command -v magick >/dev/null 2>&1; then
+            magick -size 3000x1800 xc:white -quality 88 "$TESTFILE"
+          else
+            php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,255,255,255);imagefill($im,0,0,$w);imagejpeg($im,"/tmp/belastock-media-test-3000x1800.jpg",88);imagedestroy($im);'
+          fi
+          identify "$TESTFILE" 2>/dev/null || file "$TESTFILE"
+          ATTACH_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTFILE" --title='Bela Stock Media Diagnostic' --porcelain 2>/tmp/bs-media-import.err || true)"
+          echo "ATTACH_ID=$ATTACH_ID"
+          cat /tmp/bs-media-import.err || true
+          if [[ "$ATTACH_ID" =~ ^[0-9]+$ ]]; then
+            sudo -u belastock -H wp --path="$DOCROOT" post meta get "$ATTACH_ID" _wp_attachment_metadata || true
+            sudo -u belastock -H wp --path="$DOCROOT" post delete "$ATTACH_ID" --force >/dev/null || true
+            echo MEDIA_IMPORT_TEST=OK
+          else
+            echo MEDIA_IMPORT_TEST=FAIL
+          fi
+          rm -f "$TESTFILE"
+
           echo '=== RECENT PHP/NGINX ERRORS ==='
-          journalctl -u php8.3-fpm --since '30 minutes ago' --no-pager | tail -120 || true
-          tail -120 /home/lojabelastock/logs/nginx/loja-error.log 2>/dev/null || true
-          tail -120 /var/log/nginx/error.log 2>/dev/null || true
+          journalctl -u php8.3-fpm --since '60 minutes ago' --no-pager | tail -160 || true
+          tail -160 /home/lojabelastock/logs/nginx/loja-error.log 2>/dev/null || true
+          tail -160 /var/log/nginx/error.log 2>/dev/null || true
           echo '=== WP DEBUG LOG ==='
-          tail -120 "$DOCROOT/wp-content/debug.log" 2>/dev/null || true
+          tail -160 "$DOCROOT/wp-content/debug.log" 2>/dev/null || true
