@@ -13,19 +13,23 @@ jobs:
   deploy:
     name: WordPress WooCommerce production
     runs-on: [self-hosted, belastock-loja]
-    timeout-minutes: 35
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Guard repository
+      - name: Guard repository and syntax
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "superamplitude/loja_belastock"
           test -f deploy/EXECUCAO_TOTAL_LOJA.sh
+          test -f deploy/FINALIZE_OPERATIONAL.php
+          test -f wp-content/themes/belastock-store/operations-v1.php
+          php -l wp-content/themes/belastock-store/operations-v1.php
+          php -l deploy/FINALIZE_OPERATIONAL.php
 
       - name: Deploy loja.belastock.com.br
         shell: bash
@@ -40,3 +44,29 @@ jobs:
             echo "Runner precisa executar como root ou possuir sudo sem senha."
             exit 1
           fi
+
+      - name: Finalize operational catalog and mockup library
+        shell: bash
+        run: |
+          set -euo pipefail
+          DOCROOT="/home/belastock/htdocs/loja.belastock.com.br"
+          test -d "$DOCROOT"
+          if [ "$(id -u)" -eq 0 ]; then
+            sudo -u belastock -H wp --path="$DOCROOT" eval-file "$GITHUB_WORKSPACE/deploy/FINALIZE_OPERATIONAL.php"
+          elif sudo -n true 2>/dev/null; then
+            sudo -u belastock -H wp --path="$DOCROOT" eval-file "$GITHUB_WORKSPACE/deploy/FINALIZE_OPERATIONAL.php"
+          else
+            echo "Sem permissão para a auditoria operacional final."
+            exit 1
+          fi
+
+      - name: Verify critical public routes
+        shell: bash
+        run: |
+          set -euo pipefail
+          DOMAIN="loja.belastock.com.br"
+          for path in / /loja/ /carrinho/ /finalizar-compra/ /minha-conta/ /personalizacao/ /atacado/ /perguntas-frequentes/ /rastrear-pedido/; do
+            code="$(curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}")"
+            echo "${path}=${code}"
+            [[ "$code" =~ ^[23][0-9][0-9]$ ]]
+          done

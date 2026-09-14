@@ -9,6 +9,10 @@ $belastock_ui_v4 = __DIR__ . '/ui-v4.php';
 if (is_readable($belastock_ui_v4)) {
     require_once $belastock_ui_v4;
 }
+$belastock_operations_v1 = __DIR__ . '/operations-v1.php';
+if (is_readable($belastock_operations_v1)) {
+    require_once $belastock_operations_v1;
+}
 
 function belastock_store_setup(): void {
     add_theme_support('title-tag');
