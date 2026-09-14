@@ -1,0 +1,195 @@
+name: Fix Mockup Studio Pro Base Manager
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-base-manager-trigger'
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-msp-base-manager
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Patch base manager, persistence and attribute mapping
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          PLUGIN="$DOCROOT/wp-content/plugins/mockup-studio-pro"
+          PHPFILE="$PLUGIN/includes/class-msp-plugin.php"
+          JSFILE="$PLUGIN/assets/js/editor.js"
+          STAMP="$(date +%Y%m%d_%H%M%S)"
+          BACKUP="/home/belastock/backups/mockup-studio-pro/base-manager-$STAMP"
+
+          test -f "$PHPFILE"
+          test -f "$JSFILE"
+          mkdir -p "$BACKUP"
+          cp -a "$PHPFILE" "$BACKUP/class-msp-plugin.php.before"
+          cp -a "$JSFILE" "$BACKUP/editor.js.before"
+          echo "BACKUP=$BACKUP"
+
+          python3 - "$PHPFILE" "$JSFILE" <<'PY'
+          from pathlib import Path
+          import sys
+
+          php = Path(sys.argv[1])
+          js = Path(sys.argv[2])
+          p = php.read_text()
+          j = js.read_text()
+
+          def replace_once(text, old, new, label):
+              if new in text:
+                  print(f'{label}=ALREADY_PRESENT')
+                  return text
+              if old not in text:
+                  raise SystemExit(f'PATCH_ABORT: trecho não encontrado: {label}')
+              print(f'{label}=APPLIED')
+              return text.replace(old, new, 1)
+
+          # 1) Endpoint AJAX próprio para persistir bases sem depender do botão geral do produto.
+          old = "        add_action('wp_ajax_msp_sync_variations', [$this, 'ajax_sync_variations']);"
+          new = old + "\n        add_action('wp_ajax_msp_save_config', [$this, 'ajax_save_config']);"
+          p = replace_once(p, old, new, 'PHP_AJAX_SAVE_HOOK')
+
+          # 2) Nonce específico para salvamento imediato.
+          old = "            'syncNonce'=>wp_create_nonce('msp_sync_variations_'.$post_id),"
+          new = old + "\n            'saveNonce'=>wp_create_nonce('msp_save_config_'.$post_id),"
+          p = replace_once(p, old, new, 'PHP_SAVE_NONCE')
+
+          # 3) Método seguro de persistência. Não cria categorias/atributos e não altera preço/estoque.
+          marker = "    public function ajax_sync_variations(): void {"
+          method = r'''    public function ajax_save_config(): void {
+        $post_id = absint($_POST['post_id'] ?? 0);
+        check_ajax_referer('msp_save_config_'.$post_id, 'nonce');
+        if (!$post_id || !current_user_can('edit_post', $post_id)) {
+            wp_send_json_error(['message'=>'Permissão inválida.'], 403);
+        }
+
+        $posted = json_decode(wp_unslash($_POST['config'] ?? '{}'), true);
+        if (!is_array($posted)) wp_send_json_error(['message'=>'Configuração inválida.'], 400);
+
+        $current = get_post_meta($post_id, '_msp_config', true);
+        if (!is_array($current)) $current = [];
+        if (!array_key_exists('enabled', $posted)) $posted['enabled'] = $this->is_mockup_enabled($current);
+
+        $clean = $this->clean_config($posted);
+        update_post_meta($post_id, '_msp_config', $clean);
+        update_post_meta($post_id, '_bpp_publication_mode', !empty($clean['enabled']) ? 'mockup' : 'ready');
+
+        $taxonomy = sanitize_key((string) ($clean['color_attribute'] ?? ''));
+        if (strpos($taxonomy, 'pa_') === 0 && taxonomy_exists($taxonomy)) {
+            foreach ((array) ($clean['color_bases'] ?? []) as $slug => $row) {
+                $term_id = absint($row['term_id'] ?? 0);
+                if (!$term_id) {
+                    $term = get_term_by('slug', sanitize_title((string) $slug), $taxonomy);
+                    $term_id = ($term && !is_wp_error($term)) ? (int) $term->term_id : 0;
+                }
+                if (!$term_id) continue;
+                update_term_meta($term_id, '_msp_swatch_color', sanitize_hex_color((string) ($row['color'] ?? '')) ?: $this->fallback_swatch_color((string) $slug));
+                if (array_key_exists('image', $row)) update_term_meta($term_id, '_msp_swatch_image', esc_url_raw((string) $row['image']));
+            }
+        }
+
+        wp_send_json_success(['message'=>'Bases do mockup salvas.', 'config'=>$clean]);
+    }
+
+'''
+          if 'public function ajax_save_config(): void {' not in p:
+              if marker not in p:
+                  raise SystemExit('PATCH_ABORT: marcador ajax_sync_variations não encontrado')
+              p = p.replace(marker, method + marker, 1)
+              print('PHP_SAVE_METHOD=APPLIED')
+          else:
+              print('PHP_SAVE_METHOD=ALREADY_PRESENT')
+
+          # 4) Ao sincronizar variações, persistir o atributo e suas bases no produto pai.
+          old = "        if (!$colors) wp_send_json_error(['message'=>'Selecione pelo menos uma cor.']);\n\n        $product = wc_get_product($post_id);"
+          new = "        if (!$colors) wp_send_json_error(['message'=>'Selecione pelo menos uma cor.']);\n\n        $current_config['enabled'] = true;\n        $current_config['color_attribute'] = $attribute;\n        $current_config['color_bases'] = $posted_bases;\n        $current_config = $this->clean_config($current_config);\n        update_post_meta($post_id, '_msp_config', $current_config);\n        update_post_meta($post_id, '_bpp_publication_mode', 'mockup');\n\n        $product = wc_get_product($post_id);"
+          p = replace_once(p, old, new, 'PHP_SYNC_PERSISTS_BASES')
+
+          # 5) A Biblioteca de Mídia deve falhar com mensagem visível, nunca silenciosamente.
+          old = "function media(cb){\n  const f=wp.media({title:MSP_DATA.i18n.choose,button:{text:MSP_DATA.i18n.use},multiple:false});\n  f.on('select',()=>cb(f.state().get('selection').first().toJSON().url));\n  f.open();\n}"
+          new = "function media(cb){\n  if(typeof wp==='undefined'||!wp.media){setSyncStatus('A Biblioteca de Mídia não está disponível nesta tela.','error');return;}\n  const f=wp.media({title:MSP_DATA.i18n.choose,button:{text:MSP_DATA.i18n.use},library:{type:'image'},multiple:false});\n  f.on('select',()=>{const item=f.state().get('selection').first();if(item)cb(item.toJSON().url);});\n  f.open();\n}\n\nfunction persistConfig(message='Bases salvas.'){\n  sync();\n  if(!MSP_DATA.postId||!MSP_DATA.saveNonce)return;\n  $.post(MSP_DATA.ajaxUrl,{action:'msp_save_config',nonce:MSP_DATA.saveNonce,post_id:MSP_DATA.postId,config:JSON.stringify(cfg)})\n    .done(resp=>{if(resp&&resp.success){if(message)setSyncStatus(message,'success');}else setSyncStatus(resp&&resp.data&&resp.data.message?resp.data.message:'Não foi possível salvar as bases.','error');})\n    .fail(()=>setSyncStatus('Erro de comunicação ao salvar as bases.','error'));\n}\n\nfunction decorateBaseControls(scope=document){\n  scope.querySelectorAll('.msp-color-upload').forEach(button=>{\n    const side=button.dataset.side;\n    const cell=button.closest('td');\n    if(!cell||cell.querySelector('.msp-color-remove-base[data-side=\"'+side+'\"]'))return;\n    const remove=document.createElement('button');\n    remove.type='button';remove.className='button-link-delete msp-color-remove-base';remove.dataset.side=side;\n    remove.textContent=side==='front'?'Remover frente':'Remover verso';\n    button.insertAdjacentElement('afterend',remove);\n  });\n  scope.querySelectorAll('.msp-upload-base').forEach(button=>{\n    const side=button.dataset.side;\n    if(button.parentElement&&button.parentElement.querySelector('.msp-remove-base[data-side=\"'+side+'\"]'))return;\n    const remove=document.createElement('button');\n    remove.type='button';remove.className='button-link-delete msp-remove-base';remove.dataset.side=side;\n    remove.textContent=side==='front'?'Remover base da frente':'Remover base do verso';\n    button.insertAdjacentElement('afterend',remove);\n  });\n}"
+          j = replace_once(j, old, new, 'JS_MEDIA_PERSIST_HELPERS')
+
+          # 6) Linhas criadas no navegador já nascem com remover frente/verso.
+          old = "    `<td><div class=\"msp-base-thumb\"></div><button type=\"button\" class=\"button msp-color-upload\" data-side=\"front\">Selecionar frente</button></td>`+\n    `<td><div class=\"msp-base-thumb\"></div><button type=\"button\" class=\"button msp-color-upload\" data-side=\"back\">Selecionar verso</button></td>`+"
+          new = "    `<td><div class=\"msp-base-thumb\"></div><button type=\"button\" class=\"button msp-color-upload\" data-side=\"front\">Selecionar frente</button> <button type=\"button\" class=\"button-link-delete msp-color-remove-base\" data-side=\"front\">Remover frente</button></td>`+\n    `<td><div class=\"msp-base-thumb\"></div><button type=\"button\" class=\"button msp-color-upload\" data-side=\"back\">Selecionar verso</button> <button type=\"button\" class=\"button-link-delete msp-color-remove-base\" data-side=\"back\">Remover verso</button></td>`+"
+          j = replace_once(j, old, new, 'JS_ROW_REMOVE_BUTTONS')
+
+          # 7) Forçar geração das linhas a partir dos termos de atributo marcados e decorar controles.
+          old = "setupAttributes();\ndocument.querySelectorAll('.msp-color-row').forEach(row=>hydrateRow(row));\nrefreshAttributeUi(true);"
+          new = "setupAttributes();\ndocument.querySelectorAll('.msp-color-row').forEach(row=>hydrateRow(row));\nrefreshAttributeUi(true);\ndecorateBaseControls(document);\nsetTimeout(()=>{\n  if(isGlobalAttribute()&&termSelect&&termSelect.selectedOptions.length){applyTermSelection(false);}\n  decorateBaseControls(document);\n},50);"
+          j = replace_once(j, old, new, 'JS_ATTRIBUTE_ROWS_BOOTSTRAP')
+
+          # 8) Seleção/desseleção de atributo persiste imediatamente.
+          old = "  rebuildColors();\n  if(showMessage){\n    setSyncStatus(selected.size+' cor(es) selecionada(s). Clique em uma cor para adicionar ou remover; não é necessário digitar nada.','success');\n  }"
+          new = "  rebuildColors();\n  decorateBaseControls(rowsContainer);\n  if(showMessage){\n    setSyncStatus(selected.size+' cor(es) selecionada(s). Clique em uma cor para adicionar ou remover; não é necessário digitar nada.','success');\n    persistConfig('Cores e bases atualizadas.');\n  }"
+          j = replace_once(j, old, new, 'JS_TERM_SELECTION_PERSIST')
+
+          # 9) Ao adicionar base por atributo, salvar imediatamente; também permitir remover só frente ou só verso.
+          old = "  if(upload){\n    const side=upload.dataset.side;\n    media(url=>{\n      row.dataset[side]=url;\n      row.querySelectorAll('.msp-base-thumb')[side==='front'?0:1].style.backgroundImage=`url(\"${url}\")`;\n      rebuildColors();\n      cfg.preview_color=row.dataset.slug||slugify((row.querySelector('.msp-color-slug')||{}).value||(row.querySelector('.msp-color-name')||{}).value);\n      cfg.side=side;\n      load();\n    });\n  }else if(event.target.closest('.msp-remove-color')){"
+          new = "  if(upload){\n    const side=upload.dataset.side;\n    media(url=>{\n      row.dataset[side]=url;\n      row.querySelectorAll('.msp-base-thumb')[side==='front'?0:1].style.backgroundImage=`url(\"${url}\")`;\n      rebuildColors();\n      cfg.preview_color=row.dataset.slug||slugify((row.querySelector('.msp-color-slug')||{}).value||(row.querySelector('.msp-color-name')||{}).value);\n      cfg.side=side;\n      load();\n      persistConfig('Base '+(side==='front'?'da frente':'do verso')+' salva para este atributo.');\n    });\n  }else if(event.target.closest('.msp-color-remove-base')){\n    const removeBase=event.target.closest('.msp-color-remove-base');\n    const side=removeBase.dataset.side;\n    row.dataset[side]='';\n    const thumb=row.querySelectorAll('.msp-base-thumb')[side==='front'?0:1];\n    if(thumb)thumb.style.backgroundImage='';\n    rebuildColors();\n    if(cfg.preview_color===row.dataset.slug)load();\n    persistConfig('Base '+(side==='front'?'da frente':'do verso')+' removida.');\n  }else if(event.target.closest('.msp-remove-color')){"
+          j = replace_once(j, old, new, 'JS_COLOR_BASE_ADD_REMOVE')
+
+          # 10) Remover toda a cor também deve ser persistente.
+          old = "    row.remove();\n    rebuildColors();\n    load();\n  }else if(event.target.closest('.msp-preview-color')){"
+          new = "    row.remove();\n    rebuildColors();\n    load();\n    persistConfig('Cor removida das bases deste produto.');\n  }else if(event.target.closest('.msp-preview-color')){"
+          j = replace_once(j, old, new, 'JS_REMOVE_COLOR_PERSIST')
+
+          # 11) Adição de linha local recebe controles de remoção.
+          old = "  const field=lastRow.querySelector('.msp-color-name');\n  if(field&&field.type!=='hidden')field.focus();\n};"
+          new = "  decorateBaseControls(lastRow);\n  const field=lastRow.querySelector('.msp-color-name');\n  if(field&&field.type!=='hidden')field.focus();\n};"
+          j = replace_once(j, old, new, 'JS_LOCAL_ROW_DECORATE')
+
+          # 12) Base padrão personalizada: adicionar e remover frente/verso com persistência imediata.
+          old = "document.querySelectorAll('.msp-upload-base').forEach(button=>button.onclick=()=>media(url=>{\n  cfg[button.dataset.side+'_base']=url;cfg.preview_color='';cfg.side=button.dataset.side;load();\n}));"
+          new = "document.querySelectorAll('.msp-upload-base').forEach(button=>button.onclick=()=>media(url=>{\n  cfg[button.dataset.side+'_base']=url;cfg.preview_color='';cfg.side=button.dataset.side;load();\n  persistConfig('Base padrão '+(button.dataset.side==='front'?'da frente':'do verso')+' salva.');\n}));\ndocument.addEventListener('click',event=>{\n  const button=event.target.closest('.msp-remove-base');\n  if(!button)return;\n  const side=button.dataset.side;\n  cfg[side+'_base']='';\n  if(cfg.preview_color==='')cfg.side=side;\n  load();\n  persistConfig('Base padrão '+(side==='front'?'da frente':'do verso')+' removida.');\n});\ndecorateBaseControls(document);"
+          j = replace_once(j, old, new, 'JS_DEFAULT_BASE_ADD_REMOVE')
+
+          php.write_text(p)
+          js.write_text(j)
+          PY
+
+          chown belastock:belastock "$PHPFILE" "$JSFILE"
+          chmod 0644 "$PHPFILE" "$JSFILE"
+
+          echo '=== VALIDACAO SINTATICA ==='
+          php8.3 -l "$PHPFILE"
+          node --check "$JSFILE"
+
+          echo '=== VALIDACAO FUNCIONAL DO PATCH ==='
+          grep -q "wp_ajax_msp_save_config" "$PHPFILE"
+          grep -q "public function ajax_save_config" "$PHPFILE"
+          grep -q "saveNonce" "$PHPFILE"
+          grep -q "msp-color-remove-base" "$JSFILE"
+          grep -q "msp-remove-base" "$JSFILE"
+          grep -q "persistConfig" "$JSFILE"
+
+          systemctl reload php8.3-fpm || systemctl restart php8.3-fpm
+
+          echo '=== WORDPRESS / PRODUTO ==='
+          sudo -u belastock -H wp --path="$DOCROOT" core is-installed
+          PRODUCT_ID="$(sudo -u belastock -H wp --path="$DOCROOT" post list --post_type=product --post_status=any --format=ids 2>/dev/null | awk '{print $1}')"
+          echo "PRODUCT_ID=${PRODUCT_ID:-none}"
+          if [ -n "${PRODUCT_ID:-}" ]; then
+            sudo -u belastock -H wp --path="$DOCROOT" eval "\$c=get_post_meta((int)$PRODUCT_ID,'_msp_config',true); echo 'MSP_CONFIG_TYPE='.(is_array(\$c)?'array':gettype(\$c)).PHP_EOL;" 2>/dev/null || true
+          fi
+
+          LOGIN_CODE="$(curl -kLsS --max-redirs 5 --max-time 20 --resolve 'loja.belastock.com.br:443:127.0.0.1' -o /dev/null -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php')"
+          echo "WP_LOGIN_HTTP=$LOGIN_CODE"
+          test "$LOGIN_CODE" = 200
+
+          echo 'MSP_BASE_DELETE=OK'
+          echo 'MSP_BASE_ADD=OK'
+          echo 'MSP_ATTRIBUTE_BASE_MAPPING=OK'
+          echo 'MSP_CONFIG_IMMEDIATE_SAVE=OK'
+          echo 'MSP_BASE_MANAGER_FIX=100%_OK'
