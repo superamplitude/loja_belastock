@@ -1,6 +1,11 @@
 <?php
 if (!defined('ABSPATH')) exit;
 
+$belastock_hero_v3 = __DIR__ . '/hero-v3.php';
+if (is_readable($belastock_hero_v3)) {
+    require_once $belastock_hero_v3;
+}
+
 function belastock_store_setup(): void {
     add_theme_support('title-tag');
     add_theme_support('post-thumbnails');
