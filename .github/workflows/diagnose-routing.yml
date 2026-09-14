@@ -1,7 +1,13 @@
 name: Diagnose Bela Stock Routing
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: belastock-routing-diagnose
+  cancel-in-progress: true
 
 jobs:
   diagnose:
@@ -27,16 +33,16 @@ jobs:
             if [[ "$id" =~ ^[0-9]+$ ]]; then sudo -u belastock -H wp --path="$DOCROOT" post get "$id" --fields=ID,post_name,post_status,post_type --format=json || true; fi
           done
           echo '=== NGINX CONFIG FILES ==='
-          grep -RIl --include='*.conf' "$DOMAIN" /etc/nginx /etc/nginx/sites-enabled /etc/nginx/conf.d 2>/dev/null | head -20 || true
+          grep -RIl --include='*.conf' "$DOMAIN" /etc/nginx 2>/dev/null | head -20 || true
           echo '=== NGINX SERVER BLOCK EXCERPTS ==='
-          nginx -T 2>/dev/null | awk -v d="$DOMAIN" 'BEGIN{n=0} index($0,d){n=80} n>0{print;n--}' | head -240 || true
+          nginx -T 2>/dev/null | awk -v d="$DOMAIN" 'BEGIN{n=0} index($0,d){n=100} n>0{print;n--}' | head -300 || true
           echo '=== DOCROOT ==='
           ls -la "$DOCROOT" | head -50
           echo '=== INDEX/HTACCESS ==='
           test -f "$DOCROOT/index.php" && sed -n '1,60p' "$DOCROOT/index.php" || true
           test -f "$DOCROOT/.htaccess" && cat "$DOCROOT/.htaccess" || true
           echo '=== HTTP ==='
-          for path in / /loja/ /?page_id=1 /index.php/loja/ /wp-json/; do
+          for path in / /loja/ '/?page_id=5' /index.php/loja/ /wp-json/; do
             code="$(curl -L -k -sS --max-time 10 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}" || true)"
             echo "$path=$code"
           done
