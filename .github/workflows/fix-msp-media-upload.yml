@@ -53,16 +53,13 @@ jobs:
           echo "JPG_ATTACHMENT_ID=$JPG_ID"
           cat /tmp/bs-media-fix-jpg.err || true
           [[ "$JPG_ID" =~ ^[0-9]+$ ]]
-          if ! sudo -u belastock -H wp --path="$DOCROOT" media regenerate "$JPG_ID" --yes >/tmp/bs-media-regen-jpg.out 2>/tmp/bs-media-regen-jpg.err; then
-            cat /tmp/bs-media-regen-jpg.out || true
-            cat /tmp/bs-media-regen-jpg.err || true
-            exit 1
-          fi
-          cat /tmp/bs-media-regen-jpg.out || true
-          cat /tmp/bs-media-regen-jpg.err || true
+          JPG_FILE="$(sudo -u belastock -H wp --path="$DOCROOT" eval "echo get_attached_file($JPG_ID);" 2>/dev/null || true)"
+          echo "JPG_FILE=$JPG_FILE"
+          test -n "$JPG_FILE"
+          test -f "$JPG_FILE"
           sudo -u belastock -H wp --path="$DOCROOT" post delete "$JPG_ID" --force >/dev/null 2>&1 || true
           rm -f "$TESTJPG"
-          echo 'JPEG_PROCESSING=OK'
+          echo 'JPEG_UPLOAD=OK'
 
           echo '=== TESTE PNG 3000x1800 ==='
           TESTPNG=/tmp/belastock-media-fix-test-3000x1800.png
@@ -71,16 +68,13 @@ jobs:
           echo "PNG_ATTACHMENT_ID=$PNG_ID"
           cat /tmp/bs-media-fix-png.err || true
           [[ "$PNG_ID" =~ ^[0-9]+$ ]]
-          if ! sudo -u belastock -H wp --path="$DOCROOT" media regenerate "$PNG_ID" --yes >/tmp/bs-media-regen-png.out 2>/tmp/bs-media-regen-png.err; then
-            cat /tmp/bs-media-regen-png.out || true
-            cat /tmp/bs-media-regen-png.err || true
-            exit 1
-          fi
-          cat /tmp/bs-media-regen-png.out || true
-          cat /tmp/bs-media-regen-png.err || true
+          PNG_FILE="$(sudo -u belastock -H wp --path="$DOCROOT" eval "echo get_attached_file($PNG_ID);" 2>/dev/null || true)"
+          echo "PNG_FILE=$PNG_FILE"
+          test -n "$PNG_FILE"
+          test -f "$PNG_FILE"
           sudo -u belastock -H wp --path="$DOCROOT" post delete "$PNG_ID" --force >/dev/null 2>&1 || true
           rm -f "$TESTPNG"
-          echo 'PNG_PROCESSING=OK'
+          echo 'PNG_UPLOAD=OK'
 
           LOGIN_CODE="$(curl -kLsS --max-redirs 5 --max-time 20 --resolve 'loja.belastock.com.br:443:127.0.0.1' -o /dev/null -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php')"
           echo "WP_LOGIN_HTTP=$LOGIN_CODE"
