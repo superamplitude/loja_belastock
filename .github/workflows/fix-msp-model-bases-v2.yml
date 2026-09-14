@@ -1,0 +1,27 @@
+name: Fix MSP Model Bases V2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-model-bases-v2-trigger'
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-msp-model-bases-v2
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Apply model/color base manager inside VPS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL 'https://raw.githubusercontent.com/superamplitude/loja_belastock/main/deploy/fix-msp-model-bases-v2.sh' -o /tmp/fix-msp-model-bases-v2.sh
+          chmod +x /tmp/fix-msp-model-bases-v2.sh
+          bash /tmp/fix-msp-model-bases-v2.sh
