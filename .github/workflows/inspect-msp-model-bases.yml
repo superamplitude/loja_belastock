@@ -1,0 +1,37 @@
+name: Inspect MSP Model Bases
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-model-bases-inspect-trigger'
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-msp-model-bases-inspect
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Inspect current deployed plugin
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          echo '=== PHP 1-130 ==='
+          nl -ba "$P/includes/class-msp-plugin.php" | sed -n '1,130p'
+          echo '=== PHP 840-960 ==='
+          nl -ba "$P/includes/class-msp-plugin.php" | sed -n '840,960p'
+          echo '=== JS 35-120 ==='
+          nl -ba "$P/assets/js/editor.js" | sed -n '35,120p'
+          echo '=== JS 210-330 ==='
+          nl -ba "$P/assets/js/editor.js" | sed -n '210,330p'
+          echo '=== JS 525-640 ==='
+          nl -ba "$P/assets/js/editor.js" | sed -n '525,640p'
+          echo '=== PRODUCT 27 CONFIG ==='
+          sudo -u belastock -H wp --path='/home/belastock/htdocs/loja.belastock.com.br' eval '$v=get_post_meta(27,"_msp_config",true); echo wp_json_encode($v,JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES|JSON_UNESCAPED_UNICODE),PHP_EOL;' 2>/dev/null || true
