@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: belastock-loja-production
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -50,7 +50,7 @@ jobs:
           set -e
           if [ "$rc" -ne 0 ]; then
             if grep -q "Uma URL crítica da loja não respondeu corretamente (HTTP=404)" /tmp/belastock-deploy.log; then
-              echo "Validação antiga encontrou rota 404; a etapa operacional seguinte vai reparar slugs e regravar permalinks."
+              echo "Validação antiga encontrou rota 404; a etapa operacional seguinte vai reparar as rotas sem depender de rewrite do nginx."
             else
               exit "$rc"
             fi
@@ -77,7 +77,7 @@ jobs:
           set -euo pipefail
           DOMAIN="loja.belastock.com.br"
           fail=0
-          for path in / /loja/ /carrinho/ /finalizar-compra/ /minha-conta/ /personalizacao/ /atacado/ /perguntas-frequentes/ /rastrear-pedido/; do
+          for path in / /loja/ /carrinho/ /finalizar-compra/ /minha-conta/ /personalizacao/ /atacado/ /perguntas-frequentes/ /rastrear-pedido/ /categoria-produto/camisetas/ /categoria-produto/bones/ /categoria-produto/ecobags/; do
             code="$(curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}" || true)"
             echo "${path}=${code}"
             if ! [[ "$code" =~ ^[23][0-9][0-9]$ ]]; then fail=1; fi
@@ -92,6 +92,7 @@ jobs:
           WP="sudo -u belastock -H wp --path=$DOCROOT"
           $WP core is-installed
           test "$($WP option get belastock_operations_version 2>/dev/null | tail -n1)" = "1.0.0"
+          test -z "$($WP option get permalink_structure 2>/dev/null | tail -n1)"
           for slug in camisetas manga-longa regatas baby-look machao moletons bones ecobags adesivos personalizados; do
             $WP term get product_cat "$slug" --by=slug --field=term_id >/dev/null
           done
