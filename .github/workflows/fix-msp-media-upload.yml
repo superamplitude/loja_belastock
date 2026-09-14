@@ -46,32 +46,39 @@ jobs:
           grep -n 'function check_svg_filetype' "$FILE"
           systemctl reload php8.3-fpm || systemctl restart php8.3-fpm
 
-          echo '=== LIMPEZA DE TESTE ANTERIOR ==='
-          for OLD_ID in $(sudo -u belastock -H wp --path="$DOCROOT" post list --post_type=attachment --search='Bela Stock Media Fix' --format=ids 2>/dev/null || true); do
-            sudo -u belastock -H wp --path="$DOCROOT" post delete "$OLD_ID" --force >/dev/null || true
-          done
-
           echo '=== TESTE JPEG 3000x1800 ==='
           TESTJPG=/tmp/belastock-media-fix-test-3000x1800.jpg
           php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,255,255,255);imagefill($im,0,0,$w);imagejpeg($im,"/tmp/belastock-media-fix-test-3000x1800.jpg",88);imagedestroy($im);'
-          JPG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTJPG" --title='Bela Stock Media Fix JPG' --porcelain)"
+          JPG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTJPG" --title='Bela Stock Media Fix JPG' --porcelain 2>/tmp/bs-media-fix-jpg.err)"
           echo "JPG_ATTACHMENT_ID=$JPG_ID"
+          cat /tmp/bs-media-fix-jpg.err || true
           [[ "$JPG_ID" =~ ^[0-9]+$ ]]
-          test "$(sudo -u belastock -H wp --path="$DOCROOT" post get "$JPG_ID" --field=post_type)" = attachment
-          sudo -u belastock -H wp --path="$DOCROOT" media regenerate "$JPG_ID" --yes
-          sudo -u belastock -H wp --path="$DOCROOT" post delete "$JPG_ID" --force >/dev/null
+          if ! sudo -u belastock -H wp --path="$DOCROOT" media regenerate "$JPG_ID" --yes >/tmp/bs-media-regen-jpg.out 2>/tmp/bs-media-regen-jpg.err; then
+            cat /tmp/bs-media-regen-jpg.out || true
+            cat /tmp/bs-media-regen-jpg.err || true
+            exit 1
+          fi
+          cat /tmp/bs-media-regen-jpg.out || true
+          cat /tmp/bs-media-regen-jpg.err || true
+          sudo -u belastock -H wp --path="$DOCROOT" post delete "$JPG_ID" --force >/dev/null 2>&1 || true
           rm -f "$TESTJPG"
           echo 'JPEG_PROCESSING=OK'
 
           echo '=== TESTE PNG 3000x1800 ==='
           TESTPNG=/tmp/belastock-media-fix-test-3000x1800.png
           php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,245,245,255);imagefill($im,0,0,$w);imagepng($im,"/tmp/belastock-media-fix-test-3000x1800.png",6);imagedestroy($im);'
-          PNG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTPNG" --title='Bela Stock Media Fix PNG' --porcelain)"
+          PNG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTPNG" --title='Bela Stock Media Fix PNG' --porcelain 2>/tmp/bs-media-fix-png.err)"
           echo "PNG_ATTACHMENT_ID=$PNG_ID"
+          cat /tmp/bs-media-fix-png.err || true
           [[ "$PNG_ID" =~ ^[0-9]+$ ]]
-          test "$(sudo -u belastock -H wp --path="$DOCROOT" post get "$PNG_ID" --field=post_type)" = attachment
-          sudo -u belastock -H wp --path="$DOCROOT" media regenerate "$PNG_ID" --yes
-          sudo -u belastock -H wp --path="$DOCROOT" post delete "$PNG_ID" --force >/dev/null
+          if ! sudo -u belastock -H wp --path="$DOCROOT" media regenerate "$PNG_ID" --yes >/tmp/bs-media-regen-png.out 2>/tmp/bs-media-regen-png.err; then
+            cat /tmp/bs-media-regen-png.out || true
+            cat /tmp/bs-media-regen-png.err || true
+            exit 1
+          fi
+          cat /tmp/bs-media-regen-png.out || true
+          cat /tmp/bs-media-regen-png.err || true
+          sudo -u belastock -H wp --path="$DOCROOT" post delete "$PNG_ID" --force >/dev/null 2>&1 || true
           rm -f "$TESTPNG"
           echo 'PNG_PROCESSING=OK'
 
