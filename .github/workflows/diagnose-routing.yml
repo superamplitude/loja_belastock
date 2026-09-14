@@ -16,44 +16,35 @@ jobs:
     permissions:
       contents: read
     steps:
-      - name: Inspect backend and nginx routing
+      - name: Inspect PHP FPM and vhosts
         shell: bash
         run: |
           set -euo pipefail
           DOMAIN="loja.belastock.com.br"
           DOCROOT="/home/belastock/htdocs/${DOMAIN}"
-          echo '=== WORDPRESS ==='
-          sudo -u belastock -H wp --path="$DOCROOT" option get home || true
-          sudo -u belastock -H wp --path="$DOCROOT" option get siteurl || true
-          echo -n 'permalink='; sudo -u belastock -H wp --path="$DOCROOT" option get permalink_structure || true
-          sudo -u belastock -H wp --path="$DOCROOT" post list --post_type=product --post_status=publish --format=count || true
-          echo '=== PORT 3210 ==='
-          ss -lntp | grep ':3210' || true
-          pid="$(ss -lntp 2>/dev/null | sed -n 's/.*:3210 .*pid=\([0-9][0-9]*\).*/\1/p' | head -1)"
-          echo "PID=${pid:-none}"
-          if [[ -n "${pid:-}" ]]; then
-            ps -fp "$pid" || true
-            tr '\0' ' ' < "/proc/$pid/cmdline" || true; echo
-            readlink -f "/proc/$pid/exe" || true
-            readlink -f "/proc/$pid/cwd" || true
-            cat "/proc/$pid/cgroup" || true
-          fi
-          echo '=== SYSTEMD CANDIDATES ==='
-          systemctl list-units --type=service --all --no-pager | grep -Ei 'belastock|3210|php|node|apache|caddy' | head -100 || true
-          echo '=== PHP FPM ==='
-          find /run /var/run -maxdepth 3 -type s \( -name '*php*' -o -name '*fpm*' \) -print 2>/dev/null | sort -u || true
-          systemctl list-units --type=service --all --no-pager | grep -E 'php.*fpm' || true
-          echo '=== NGINX DOMAIN ==='
-          cat "/etc/nginx/sites-enabled/${DOMAIN}.conf" || true
-          echo '=== OTHER PHP VHOST EXAMPLES ==='
-          grep -RIl --include='*.conf' 'fastcgi_pass' /etc/nginx/sites-enabled 2>/dev/null | head -5 | while read -r f; do echo "--- $f"; grep -n -E 'server_name|root |index |try_files|fastcgi_pass|include.*php' "$f" | head -80; done || true
-          echo '=== BACKEND HTTP 3210 ==='
-          for path in / /loja/ /loja/index.php '/?page_id=7' /wp-login.php /wp-admin/ /wp-json/; do
-            code="$(curl -sS --max-time 10 -o /tmp/bsbody -w '%{http_code}' -H "Host: ${DOMAIN}" "http://127.0.0.1:3210${path}" || true)"
-            echo "$path=$code body=$(head -c 80 /tmp/bsbody | tr '\n' ' ')"
+          echo '=== PORTS PHP/FPM ==='
+          ss -lntp | grep -Ei 'php|fpm|:90[0-9][0-9]|:92[0-9][0-9]' || true
+          ss -lxnp | grep -Ei 'php|fpm' || true
+          echo '=== FPM POOLS ==='
+          find /etc/php -path '*/fpm/pool.d/*' -type f -maxdepth 6 -print 2>/dev/null | sort | while read -r f; do
+            echo "--- $f"
+            grep -nE '^\[|^[[:space:]]*user[[:space:]]*=|^[[:space:]]*group[[:space:]]*=|^[[:space:]]*listen[[:space:]]*=|^[[:space:]]*listen\.(owner|group|mode)' "$f" | head -40 || true
           done
-          echo '=== PUBLIC HTTP ==='
-          for path in / /loja/ /loja/index.php '/?page_id=7' /wp-login.php /wp-admin/; do
-            code="$(curl -L -k -sS --max-time 10 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}" || true)"
-            echo "$path=$code"
+          echo '=== PHP BINARIES ==='
+          php -v | head -2 || true
+          for v in 8.1 8.2 8.3 8.4 8.5; do test -x "/usr/bin/php$v" && "/usr/bin/php$v" -v | head -1; done
+          echo '=== CLOUDPANEL CLI HELP ==='
+          clpctl 2>&1 | head -120 || true
+          echo '=== VHOSTS WITH WORDPRESS/PHP ==='
+          for f in /etc/nginx/sites-enabled/*.conf; do
+            if grep -q 'fastcgi_pass' "$f"; then
+              echo "--- $f"
+              grep -nE 'server_name|root |index |try_files|fastcgi_pass|fastcgi_param SCRIPT_FILENAME|include.*fastcgi' "$f" | head -100
+            fi
           done
+          echo '=== CURRENT VHOST ==='
+          cat "/etc/nginx/sites-enabled/${DOMAIN}.conf"
+          echo '=== CURRENT WP ==='
+          sudo -u belastock -H wp --path="$DOCROOT" core version
+          sudo -u belastock -H wp --path="$DOCROOT" option get permalink_structure || true
+          echo -n 'published_products='; sudo -u belastock -H wp --path="$DOCROOT" post list --post_type=product --post_status=publish --format=count || true; echo
