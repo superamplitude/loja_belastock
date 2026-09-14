@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - '.msp-media-fix-trigger'
+  workflow_dispatch:
 
 concurrency:
   group: belastock-msp-media-fix
@@ -13,11 +14,11 @@ concurrency:
 jobs:
   fix:
     runs-on: [self-hosted, belastock-loja]
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - name: Patch media hook safely and verify upload
+      - name: Patch media hook safely and verify uploads
         shell: bash
         run: |
           set -Eeuo pipefail
@@ -29,47 +30,45 @@ jobs:
           cp -a "$FILE" "$BACKUP"
           echo "BACKUP=$BACKUP"
 
-          python3 - "$FILE" <<'PY'
-from pathlib import Path
-import sys
-p = Path(sys.argv[1])
-s = p.read_text()
-old = "public function check_svg_filetype(array $data, string $file, string $filename, array $mimes, $real_mime = null): array {"
-new = "public function check_svg_filetype(array $data, string $file, string $filename, ?array $mimes = null, $real_mime = null): array {"
-if new in s:
-    print('PATCH_ALREADY_PRESENT=YES')
-elif old in s:
-    p.write_text(s.replace(old, new, 1))
-    print('PATCH_APPLIED=YES')
-else:
-    raise SystemExit('Assinatura esperada nao encontrada; abortando sem alteracao adicional.')
-PY
-
-          php -l "$FILE"
-          grep -n 'function check_svg_filetype' "$FILE"
-          chown belastock:belastock "$FILE"
-          chmod 0644 "$FILE"
-
-          systemctl reload php8.3-fpm || systemctl restart php8.3-fpm
-
-          TESTFILE=/tmp/belastock-media-fix-test-3000x1800.jpg
-          php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,255,255,255);imagefill($im,0,0,$w);imagejpeg($im,"/tmp/belastock-media-fix-test-3000x1800.jpg",88);imagedestroy($im);'
-          ATTACH_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTFILE" --title='Bela Stock Media Fix Test' --porcelain 2>/tmp/bs-media-fix.err || true)"
-          echo "ATTACH_ID=$ATTACH_ID"
-          cat /tmp/bs-media-fix.err || true
-          if ! [[ "$ATTACH_ID" =~ ^[0-9]+$ ]]; then
-            cp -a "$BACKUP" "$FILE"
-            chown belastock:belastock "$FILE"
-            chmod 0644 "$FILE"
-            systemctl reload php8.3-fpm || true
-            echo 'TESTE FALHOU; ROLLBACK APLICADO.' >&2
+          if grep -Fq 'public function check_svg_filetype(array $data, string $file, string $filename, array $mimes, $real_mime = null): array {' "$FILE"; then
+            sed -i 's/public function check_svg_filetype(array $data, string $file, string $filename, array $mimes, $real_mime = null): array {/public function check_svg_filetype(array $data, string $file, string $filename, ?array $mimes = null, $real_mime = null): array {/' "$FILE"
+            echo 'PATCH_APPLIED=YES'
+          elif grep -Fq 'public function check_svg_filetype(array $data, string $file, string $filename, ?array $mimes = null, $real_mime = null): array {' "$FILE"; then
+            echo 'PATCH_ALREADY_PRESENT=YES'
+          else
+            echo 'Assinatura esperada nao encontrada; abortando sem alterar.' >&2
             exit 1
           fi
 
-          sudo -u belastock -H wp --path="$DOCROOT" post meta get "$ATTACH_ID" _wp_attachment_metadata >/tmp/bs-media-meta.txt
-          test -s /tmp/bs-media-meta.txt
-          sudo -u belastock -H wp --path="$DOCROOT" post delete "$ATTACH_ID" --force >/dev/null
-          rm -f "$TESTFILE"
+          chown belastock:belastock "$FILE"
+          chmod 0644 "$FILE"
+          php8.3 -l "$FILE"
+          grep -n 'function check_svg_filetype' "$FILE"
+          systemctl reload php8.3-fpm || systemctl restart php8.3-fpm
+
+          echo '=== TESTE JPEG 3000x1800 ==='
+          TESTJPG=/tmp/belastock-media-fix-test-3000x1800.jpg
+          php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,255,255,255);imagefill($im,0,0,$w);imagejpeg($im,"/tmp/belastock-media-fix-test-3000x1800.jpg",88);imagedestroy($im);'
+          JPG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTJPG" --title='Bela Stock Media Fix JPG' --porcelain 2>/tmp/bs-media-fix-jpg.err || true)"
+          echo "JPG_ATTACHMENT_ID=$JPG_ID"
+          cat /tmp/bs-media-fix-jpg.err || true
+          [[ "$JPG_ID" =~ ^[0-9]+$ ]]
+          sudo -u belastock -H wp --path="$DOCROOT" post meta get "$JPG_ID" _wp_attachment_metadata >/tmp/bs-media-meta-jpg.txt
+          test -s /tmp/bs-media-meta-jpg.txt
+          sudo -u belastock -H wp --path="$DOCROOT" post delete "$JPG_ID" --force >/dev/null
+          rm -f "$TESTJPG"
+
+          echo '=== TESTE PNG 3000x1800 ==='
+          TESTPNG=/tmp/belastock-media-fix-test-3000x1800.png
+          php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,245,245,255);imagefill($im,0,0,$w);imagepng($im,"/tmp/belastock-media-fix-test-3000x1800.png",6);imagedestroy($im);'
+          PNG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$TESTPNG" --title='Bela Stock Media Fix PNG' --porcelain 2>/tmp/bs-media-fix-png.err || true)"
+          echo "PNG_ATTACHMENT_ID=$PNG_ID"
+          cat /tmp/bs-media-fix-png.err || true
+          [[ "$PNG_ID" =~ ^[0-9]+$ ]]
+          sudo -u belastock -H wp --path="$DOCROOT" post meta get "$PNG_ID" _wp_attachment_metadata >/tmp/bs-media-meta-png.txt
+          test -s /tmp/bs-media-meta-png.txt
+          sudo -u belastock -H wp --path="$DOCROOT" post delete "$PNG_ID" --force >/dev/null
+          rm -f "$TESTPNG"
 
           LOGIN_CODE="$(curl -kLsS --max-redirs 5 --max-time 20 --resolve 'loja.belastock.com.br:443:127.0.0.1' -o /dev/null -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php')"
           echo "WP_LOGIN_HTTP=$LOGIN_CODE"
