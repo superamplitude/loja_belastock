@@ -5,6 +5,10 @@ $belastock_hero_v3 = __DIR__ . '/hero-v3.php';
 if (is_readable($belastock_hero_v3)) {
     require_once $belastock_hero_v3;
 }
+$belastock_ui_v4 = __DIR__ . '/ui-v4.php';
+if (is_readable($belastock_ui_v4)) {
+    require_once $belastock_ui_v4;
+}
 
 function belastock_store_setup(): void {
     add_theme_support('title-tag');
@@ -14,14 +18,20 @@ function belastock_store_setup(): void {
     add_theme_support('wc-product-gallery-zoom');
     add_theme_support('wc-product-gallery-lightbox');
     add_theme_support('wc-product-gallery-slider');
+    add_theme_support('html5', ['search-form','gallery','caption','style','script']);
     register_nav_menus(['primary' => 'Menu principal']);
 }
 add_action('after_setup_theme', 'belastock_store_setup');
 
 function belastock_store_assets(): void {
-    wp_enqueue_style('belastock-store', get_stylesheet_uri(), [], wp_get_theme()->get('Version'));
+    $theme = wp_get_theme();
+    wp_enqueue_style('belastock-store', get_stylesheet_uri(), [], $theme->get('Version'));
+    $pro_css = get_theme_file_path('/assets/pro-v4.css');
+    if (is_readable($pro_css)) {
+        wp_enqueue_style('belastock-store-pro-v4', get_theme_file_uri('/assets/pro-v4.css'), ['belastock-store'], (string) filemtime($pro_css));
+    }
 }
-add_action('wp_enqueue_scripts', 'belastock_store_assets');
+add_action('wp_enqueue_scripts', 'belastock_store_assets', 20);
 
 function belastock_cart_count(): int {
     return function_exists('WC') && WC()->cart ? WC()->cart->get_cart_contents_count() : 0;
