@@ -1,0 +1,81 @@
+name: Fix Mockup Studio Pro Media Upload V2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.fix-msp-media-upload-v2-trigger'
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-msp-media-fix
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Patch Mockup Studio Pro media hook and validate uploads
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT="/home/belastock/htdocs/loja.belastock.com.br"
+          FILE="$DOCROOT/wp-content/plugins/mockup-studio-pro/includes/class-msp-image-optimizer.php"
+          STAMP="$(date +%Y%m%d_%H%M%S)"
+          BACKUP="${FILE}.bak-${STAMP}"
+
+          test -f "$FILE"
+          cp -a "$FILE" "$BACKUP"
+          echo "BACKUP=$BACKUP"
+
+          python3 - "$FILE" <<'PY'
+from pathlib import Path
+import sys
+p=Path(sys.argv[1])
+s=p.read_text()
+old='public function check_svg_filetype(array $data, string $file, string $filename, array $mimes, $real_mime = null): array {'
+new='public function check_svg_filetype(array $data, string $file, string $filename, ?array $mimes = null, $real_mime = null): array {'
+if old in s:
+    s=s.replace(old,new,1)
+elif new not in s:
+    raise SystemExit('Assinatura esperada de check_svg_filetype não encontrada; abortando sem alteração.')
+p.write_text(s)
+PY
+
+          chown belastock:belastock "$FILE"
+          php8.3 -l "$FILE"
+          grep -F '?array $mimes = null' "$FILE"
+
+          echo '=== TESTE WORDPRESS / FORMATOS ==='
+          sudo -u belastock -H wp --path="$DOCROOT" eval 'require_once ABSPATH."wp-admin/includes/image.php"; foreach(["image/jpeg","image/png","image/webp"] as $m){echo $m."=".(wp_image_editor_supports(["mime_type"=>$m])?"yes":"no")."\n";}'
+
+          echo '=== TESTE JPEG GRANDE ==='
+          JPG=/tmp/belastock-msp-fix-3000x1800.jpg
+          php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,245,245,245);imagefill($im,0,0,$w);imagejpeg($im,"/tmp/belastock-msp-fix-3000x1800.jpg",90);imagedestroy($im);'
+          JPG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$JPG" --title='MSP Upload Test JPG' --porcelain)"
+          echo "JPG_ATTACHMENT_ID=$JPG_ID"
+          [[ "$JPG_ID" =~ ^[0-9]+$ ]]
+          sudo -u belastock -H wp --path="$DOCROOT" post meta get "$JPG_ID" _wp_attachment_metadata | head -c 2000 || true
+          sudo -u belastock -H wp --path="$DOCROOT" post delete "$JPG_ID" --force >/dev/null
+          rm -f "$JPG"
+
+          echo '=== TESTE PNG GRANDE ==='
+          PNG=/tmp/belastock-msp-fix-3000x1800.png
+          php8.3 -r '$im=imagecreatetruecolor(3000,1800);$w=imagecolorallocate($im,240,240,255);imagefill($im,0,0,$w);imagepng($im,"/tmp/belastock-msp-fix-3000x1800.png",6);imagedestroy($im);'
+          PNG_ID="$(sudo -u belastock -H wp --path="$DOCROOT" media import "$PNG" --title='MSP Upload Test PNG' --porcelain)"
+          echo "PNG_ATTACHMENT_ID=$PNG_ID"
+          [[ "$PNG_ID" =~ ^[0-9]+$ ]]
+          sudo -u belastock -H wp --path="$DOCROOT" post meta get "$PNG_ID" _wp_attachment_metadata | head -c 2000 || true
+          sudo -u belastock -H wp --path="$DOCROOT" post delete "$PNG_ID" --force >/dev/null
+          rm -f "$PNG"
+
+          echo '=== TESTE WP-ADMIN ==='
+          LOGIN_CODE="$(curl -kLsS --max-redirs 5 --max-time 30 --resolve 'loja.belastock.com.br:443:127.0.0.1' -o /tmp/bs-login-after-msp.html -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php')"
+          echo "WP_LOGIN_HTTP=$LOGIN_CODE"
+          test "$LOGIN_CODE" = 200
+          grep -q 'user_login' /tmp/bs-login-after-msp.html
+
+          echo 'MSP_MEDIA_UPLOAD_FIX=100%_OK'
