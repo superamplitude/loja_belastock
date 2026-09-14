@@ -12,7 +12,7 @@ concurrency:
 jobs:
   restore:
     runs-on: [self-hosted, belastock-loja]
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -28,7 +28,18 @@ jobs:
           test -d "$DOCROOT"
           test -f "$DOCROOT/wp-config.php"
           sudo -u belastock -H wp --path="$DOCROOT" core is-installed
-          echo "WP_VERSION=$(sudo -u belastock -H wp --path="$DOCROOT" core version)"
+          WP_VERSION="$(sudo -u belastock -H wp --path="$DOCROOT" core version)"
+          echo "WP_VERSION=$WP_VERSION"
+          echo 'ACTIVE_PLUGINS:'
+          sudo -u belastock -H wp --path="$DOCROOT" plugin list --status=active --field=name || true
+
+          if [ ! -f "$DOCROOT/wp-login.php" ] || [ ! -f "$DOCROOT/wp-admin/index.php" ]; then
+            echo 'Core WordPress incompleto; restaurando somente arquivos do core, sem tocar em wp-content nem banco.'
+            sudo -u belastock -H wp core download --path="$DOCROOT" --version="$WP_VERSION" --force --skip-content
+          fi
+          test -f "$DOCROOT/wp-login.php"
+          test -f "$DOCROOT/wp-admin/index.php"
+          ls -l "$DOCROOT/wp-login.php" "$DOCROOT/wp-admin/index.php"
 
           mkdir -p "$(dirname "$BACKUP")"
           cp -a "$VHOST" "$BACKUP"
@@ -69,7 +80,6 @@ jobs:
             }
 
             location ~ \.php$ {
-              try_files $uri =404;
               include fastcgi_params;
               fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
               fastcgi_param DOCUMENT_ROOT $document_root;
