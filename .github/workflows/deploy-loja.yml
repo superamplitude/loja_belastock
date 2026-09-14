@@ -13,7 +13,7 @@ jobs:
   deploy:
     name: WordPress WooCommerce production
     runs-on: [self-hosted, belastock-loja]
-    timeout-minutes: 40
+    timeout-minutes: 45
     permissions:
       contents: read
     steps:
@@ -36,13 +36,24 @@ jobs:
         run: |
           set -euo pipefail
           chmod +x deploy/EXECUCAO_TOTAL_LOJA.sh
+          set +e
           if [ "$(id -u)" -eq 0 ]; then
-            bash deploy/EXECUCAO_TOTAL_LOJA.sh
+            bash deploy/EXECUCAO_TOTAL_LOJA.sh 2>&1 | tee /tmp/belastock-deploy.log
+            rc=${PIPESTATUS[0]}
           elif sudo -n true 2>/dev/null; then
-            sudo -E bash deploy/EXECUCAO_TOTAL_LOJA.sh
+            sudo -E bash deploy/EXECUCAO_TOTAL_LOJA.sh 2>&1 | tee /tmp/belastock-deploy.log
+            rc=${PIPESTATUS[0]}
           else
             echo "Runner precisa executar como root ou possuir sudo sem senha."
             exit 1
+          fi
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            if grep -q "Uma URL crítica da loja não respondeu corretamente (HTTP=404)" /tmp/belastock-deploy.log; then
+              echo "Validação antiga encontrou rota 404; a etapa operacional seguinte vai reparar slugs e regravar permalinks."
+            else
+              exit "$rc"
+            fi
           fi
 
       - name: Finalize operational catalog and mockup library
@@ -65,8 +76,27 @@ jobs:
         run: |
           set -euo pipefail
           DOMAIN="loja.belastock.com.br"
+          fail=0
           for path in / /loja/ /carrinho/ /finalizar-compra/ /minha-conta/ /personalizacao/ /atacado/ /perguntas-frequentes/ /rastrear-pedido/; do
-            code="$(curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}")"
+            code="$(curl -L -k -sS --max-time 15 -o /dev/null -w '%{http_code}' --resolve "${DOMAIN}:443:127.0.0.1" "https://${DOMAIN}${path}" || true)"
             echo "${path}=${code}"
-            [[ "$code" =~ ^[23][0-9][0-9]$ ]]
+            if ! [[ "$code" =~ ^[23][0-9][0-9]$ ]]; then fail=1; fi
           done
+          test "$fail" -eq 0
+
+      - name: Verify WordPress operational state
+        shell: bash
+        run: |
+          set -euo pipefail
+          DOCROOT="/home/belastock/htdocs/loja.belastock.com.br"
+          WP="sudo -u belastock -H wp --path=$DOCROOT"
+          $WP core is-installed
+          test "$($WP option get belastock_operations_version 2>/dev/null | tail -n1)" = "1.0.0"
+          for slug in camisetas manga-longa regatas baby-look machao moletons bones ecobags adesivos personalizados; do
+            $WP term get product_cat "$slug" --by=slug --field=term_id >/dev/null
+          done
+          for slug in personalizacao atacado perguntas-frequentes rastrear-pedido; do
+            id="$($WP post list --post_type=page --name="$slug" --post_status=publish --field=ID --format=ids | awk '{print $1}')"
+            test -n "$id"
+          done
+          echo "BELA_STOCK_OPERATIONAL=100%_OK"
