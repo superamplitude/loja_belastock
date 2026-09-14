@@ -1,4 +1,4 @@
-name: Diagnose Bela Stock Routing
+name: Restore Bela Stock WordPress Routing
 
 on:
   push:
@@ -6,45 +6,99 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: belastock-routing-diagnose
+  group: belastock-routing-restore
   cancel-in-progress: true
 
 jobs:
-  diagnose:
+  restore:
     runs-on: [self-hosted, belastock-loja]
-    timeout-minutes: 10
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
-      - name: Inspect PHP FPM and vhosts
+      - name: Restore loja.belastock.com.br to WordPress
         shell: bash
         run: |
-          set -euo pipefail
+          set -Eeuo pipefail
           DOMAIN="loja.belastock.com.br"
           DOCROOT="/home/belastock/htdocs/${DOMAIN}"
-          echo '=== PORTS PHP/FPM ==='
-          ss -lntp | grep -Ei 'php|fpm|:90[0-9][0-9]|:92[0-9][0-9]' || true
-          ss -lxnp | grep -Ei 'php|fpm' || true
-          echo '=== FPM POOLS ==='
-          find /etc/php -path '*/fpm/pool.d/*' -type f -maxdepth 6 -print 2>/dev/null | sort | while read -r f; do
-            echo "--- $f"
-            grep -nE '^\[|^[[:space:]]*user[[:space:]]*=|^[[:space:]]*group[[:space:]]*=|^[[:space:]]*listen[[:space:]]*=|^[[:space:]]*listen\.(owner|group|mode)' "$f" | head -40 || true
-          done
-          echo '=== PHP BINARIES ==='
-          php -v | head -2 || true
-          for v in 8.1 8.2 8.3 8.4 8.5; do test -x "/usr/bin/php$v" && "/usr/bin/php$v" -v | head -1; done
-          echo '=== CLOUDPANEL CLI HELP ==='
-          clpctl 2>&1 | head -120 || true
-          echo '=== VHOSTS WITH WORDPRESS/PHP ==='
-          for f in /etc/nginx/sites-enabled/*.conf; do
-            if grep -q 'fastcgi_pass' "$f"; then
-              echo "--- $f"
-              grep -nE 'server_name|root |index |try_files|fastcgi_pass|fastcgi_param SCRIPT_FILENAME|include.*fastcgi' "$f" | head -100
-            fi
-          done
-          echo '=== CURRENT VHOST ==='
-          cat "/etc/nginx/sites-enabled/${DOMAIN}.conf"
-          echo '=== CURRENT WP ==='
-          sudo -u belastock -H wp --path="$DOCROOT" core version
-          sudo -u belastock -H wp --path="$DOCROOT" option get permalink_structure || true
-          echo -n 'published_products='; sudo -u belastock -H wp --path="$DOCROOT" post list --post_type=product --post_status=publish --format=count || true; echo
+          VHOST="/etc/nginx/sites-enabled/${DOMAIN}.conf"
+          BACKUP="/root/BELASTOCK_BRIDGE_BACKUPS/${DOMAIN}-before-wordpress-$(date +%Y%m%d_%H%M%S).conf"
+
+          test -d "$DOCROOT"
+          test -f "$DOCROOT/wp-config.php"
+          sudo -u belastock -H wp --path="$DOCROOT" core is-installed
+          echo "WP_VERSION=$(sudo -u belastock -H wp --path="$DOCROOT" core version)"
+
+          mkdir -p "$(dirname "$BACKUP")"
+          cp -a "$VHOST" "$BACKUP"
+          echo "VHOST_BACKUP=$BACKUP"
+
+          cat > "$VHOST" <<'NGINX'
+          server {
+            listen 80;
+            listen [::]:80;
+            server_name loja.belastock.com.br;
+            return 301 https://loja.belastock.com.br$request_uri;
+          }
+
+          server {
+            listen 443 quic;
+            listen 443 ssl;
+            listen [::]:443 quic;
+            listen [::]:443 ssl;
+            http2 on;
+            http3 off;
+
+            ssl_certificate_key /etc/nginx/ssl-certificates/loja.belastock.com.br.key;
+            ssl_certificate /etc/nginx/ssl-certificates/loja.belastock.com.br.crt;
+
+            server_name loja.belastock.com.br;
+            root /home/belastock/htdocs/loja.belastock.com.br;
+            index index.php index.html index.htm;
+
+            location ~ /.well-known {
+              auth_basic off;
+              allow all;
+            }
+
+            include /etc/nginx/global_settings;
+
+            location / {
+              try_files $uri $uri/ /index.php?$args;
+            }
+
+            location ~ \.php$ {
+              try_files $uri =404;
+              include fastcgi_params;
+              fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+              fastcgi_param DOCUMENT_ROOT $document_root;
+              fastcgi_param HTTPS on;
+              fastcgi_param HTTP_PROXY "";
+              fastcgi_read_timeout 300;
+              fastcgi_pass 127.0.0.1:18001;
+            }
+
+            location ~* /(?:uploads|files)/.*\.php$ { deny all; }
+            location ~ /\.(?!well-known).* { deny all; }
+          }
+          NGINX
+
+          nginx -t
+          systemctl reload nginx
+
+          HOME_CODE="$(curl -kLsS --max-redirs 5 --max-time 30 --resolve "${DOMAIN}:443:127.0.0.1" -o /tmp/bs-wp-home.html -w '%{http_code}' "https://${DOMAIN}/?restore=$(date +%s)")"
+          LOGIN_CODE="$(curl -kLsS --max-redirs 5 --max-time 30 --resolve "${DOMAIN}:443:127.0.0.1" -o /tmp/bs-wp-login.html -w '%{http_code}' "https://${DOMAIN}/wp-login.php?restore=$(date +%s)")"
+          ADMIN_CODE="$(curl -kLsS --max-redirs 0 --max-time 30 --resolve "${DOMAIN}:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://${DOMAIN}/wp-admin/" || true)"
+
+          echo "HOME_HTTP=$HOME_CODE"
+          echo "WP_LOGIN_HTTP=$LOGIN_CODE"
+          echo "WP_ADMIN_HTTP=$ADMIN_CODE"
+          test "$HOME_CODE" = "200"
+          test "$LOGIN_CODE" = "200"
+          grep -q 'user_login' /tmp/bs-wp-login.html
+          [[ "$ADMIN_CODE" =~ ^(200|301|302)$ ]]
+          grep -q 'fastcgi_pass 127.0.0.1:18001' "$VHOST"
+          ! grep -q 'proxy_pass http://127.0.0.1:3210' "$VHOST"
+          echo 'LOJA_BELASTOCK_WORDPRESS=100%_OK'
+          echo 'WP_ADMIN_URL=https://loja.belastock.com.br/wp-admin/'
