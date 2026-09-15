@@ -1,0 +1,24 @@
+name: Rollback Store Archive V1
+on:
+  push:
+    paths:
+      - '.github/workflows/rollback-store-archive-v1.yml'
+jobs:
+  rollback:
+    runs-on: self-hosted
+    steps:
+      - name: Restore archive before V1
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          THEME="$DOCROOT/wp-content/themes/belastock-store"
+          BACKUP='/home/belastock/backups/theme/archive-layout-v1-20260915_040540'
+          rm -f "$THEME/woocommerce/archive-product.php"
+          [ -f "$BACKUP/pro-v4.css.before" ] && cp -a "$BACKUP/pro-v4.css.before" "$THEME/assets/pro-v4.css"
+          chown -R belastock:belastock "$THEME/woocommerce" "$THEME/assets/pro-v4.css"
+          sudo -u belastock -H wp --path="$DOCROOT" cache flush >/dev/null 2>&1 || true
+          CODE="$(curl -kLsS --max-time 30 -o /tmp/manga-rollback.html -w '%{http_code}' 'https://loja.belastock.com.br/categoria-produto/manga-longa/')"
+          echo "HTTP=$CODE"
+          test "$CODE" = 200
+          echo 'ROLLBACK_ARCHIVE_V1=OK'
