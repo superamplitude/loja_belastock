@@ -1,0 +1,37 @@
+name: Audit MSP V8
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/audit-msp-v8.yml']
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    steps:
+      - name: Audit live plugin
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          PHP="$P/includes/class-msp-plugin.php"
+          JS="$P/assets/js/editor.js"
+          CSS="$P/assets/css/admin.css"
+          echo '=== VERSION ==='
+          grep -n -E 'Version:|MSP_VERSION' "$P/mockup-studio-pro.php" "$PHP" 2>/dev/null || true
+          echo '=== PHP MODEL MARKUP ==='
+          nl -ba "$PHP" | sed -n '280,390p'
+          echo '=== PHP AJAX ==='
+          grep -n -B5 -A120 'ajax_base_manager_action' "$PHP" || true
+          echo '=== JS MODEL ACTIONS ==='
+          nl -ba "$JS" | sed -n '240,390p'
+          nl -ba "$JS" | sed -n '730,840p'
+          echo '=== CSS MSP TAIL ==='
+          nl -ba "$CSS" | tail -n 120
+          echo '=== SYNTAX ==='
+          php -l "$PHP"
+          node --check "$JS"
+          echo '=== WP ==='
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          sudo -u belastock -H wp --path="$DOCROOT" plugin status mockup-studio-pro || true
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); echo "META=".wp_json_encode($c)."\n";'
