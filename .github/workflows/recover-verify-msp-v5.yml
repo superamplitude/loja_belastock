@@ -1,0 +1,50 @@
+name: Recover Verify MSP V5
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-v5-recover-trigger'
+  workflow_dispatch:
+
+jobs:
+  recover:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Restore product state and verify V5 patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          PHP="$DOCROOT/wp-content/plugins/mockup-studio-pro/includes/class-msp-plugin.php"
+          JS="$DOCROOT/wp-content/plugins/mockup-studio-pro/assets/js/editor.js"
+          ORIGINAL='/home/belastock/backups/mockup-studio-pro/persistence-v5-20260915_015428/product-27-config-before.json'
+          test -f "$ORIGINAL"
+
+          ORIGINAL_B64="$(base64 -w0 "$ORIGINAL")"
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$raw=base64_decode(getenv("ORIGINAL_B64")); $c=json_decode($raw,true); if(!is_array($c)){fwrite(STDERR,"ORIGINAL_INVALID\n");exit(1);} update_post_meta(27,"_msp_config",$c); echo "PRODUCT27_RESTORED=".wp_json_encode(get_post_meta(27,"_msp_config",true))."\n";' --exec='putenv("ORIGINAL_B64='"$ORIGINAL_B64"'");'
+
+          php -l "$PHP"
+          node --check "$JS"
+          grep -q "wp_ajax_msp_model_base_action" "$PHP"
+          grep -q "function ajax_model_base_action" "$PHP"
+          grep -q "modelBaseNonce" "$PHP"
+          grep -q "function persistModelBaseDirect" "$JS"
+          grep -q "function currentPostId" "$JS"
+          grep -q "syncHiddenConfig" "$JS"
+
+          # Confirma que o produto real voltou ao estado original e não ficou com dados de teste.
+          CURRENT="$(sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);echo wp_json_encode($c);')"
+          echo "CURRENT_META=$CURRENT"
+          test "$CURRENT" = '{"enabled":true}'
+
+          systemctl reload php8.3-fpm 2>/dev/null || true
+          CODE="$(curl -kLsS --max-redirs 5 --max-time 30 --resolve 'loja.belastock.com.br:443:127.0.0.1' -o /tmp/msp-v5-login.html -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php?msp-v5-final=1')"
+          test "$CODE" = 200
+          echo "WP_LOGIN_HTTP=$CODE"
+          echo 'PRODUCT_27_RECOVERY=OK'
+          echo 'MSP_V5_PATCH_PRESENT=OK'
+          echo 'MSP_V5_FINAL_VERIFY=100%_OK'
