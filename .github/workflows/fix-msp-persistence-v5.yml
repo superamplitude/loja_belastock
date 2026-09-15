@@ -1,0 +1,27 @@
+name: Fix MSP Persistence V5
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-persistence-v5-trigger'
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-msp-persistence-v5
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Apply persistence fix inside VPS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL 'https://raw.githubusercontent.com/superamplitude/loja_belastock/main/deploy/fix-msp-persistence-v5.sh' -o /tmp/fix-msp-persistence-v5.sh
+          chmod +x /tmp/fix-msp-persistence-v5.sh
+          bash /tmp/fix-msp-persistence-v5.sh
