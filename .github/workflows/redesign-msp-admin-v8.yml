@@ -1,0 +1,18 @@
+name: Redesign MSP Admin V8
+on:
+  push:
+    branches: [main]
+    paths: ['.redesign-msp-admin-v8-trigger']
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    steps:
+      - name: Apply compact professional admin layout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL 'https://raw.githubusercontent.com/superamplitude/loja_belastock/main/deploy/redesign-msp-admin-v8.sh' -o /tmp/redesign-msp-admin-v8.sh
+          chmod +x /tmp/redesign-msp-admin-v8.sh
+          bash /tmp/redesign-msp-admin-v8.sh
