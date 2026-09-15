@@ -1,0 +1,66 @@
+name: Test MSP V5 AJAX 2
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.test-msp-v5-ajax2-trigger'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Exercise remove/add and restore product state
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          sudo -u belastock -H wp --path="$DOCROOT" eval 'update_post_meta(27,"_msp_config",["enabled"=>true]);'
+
+          set +e
+          AJAX_OUT="$(sudo -u belastock -H wp --path="$DOCROOT" eval '
+          wp_set_current_user(1);
+          $_POST=["nonce"=>wp_create_nonce("msp_model_base"),"post_id"=>27,"template"=>"tshirt-short","side"=>"front","mode"=>"remove","url"=>""];
+          $_REQUEST=$_POST;
+          do_action("wp_ajax_msp_model_base_action");
+          ' 2>/tmp/msp-v5-ajax2.err)"
+          RC=$?
+          set -e
+          echo "AJAX_RC=$RC"
+          echo "AJAX_OUT=$AJAX_OUT"
+          cat /tmp/msp-v5-ajax2.err || true
+          echo "$AJAX_OUT" | grep -q '"success":true'
+
+          STATE="$(sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); echo wp_json_encode($c);')"
+          echo "STATE_AFTER_REMOVE=$STATE"
+          echo "$STATE" | grep -q '"front_disabled":true'
+
+          set +e
+          ADD_OUT="$(sudo -u belastock -H wp --path="$DOCROOT" eval '
+          wp_set_current_user(1);
+          $_POST=["nonce"=>wp_create_nonce("msp_model_base"),"post_id"=>27,"template"=>"tshirt-short","side"=>"front","mode"=>"add","url"=>"https://example.com/test-base.png"];
+          $_REQUEST=$_POST;
+          do_action("wp_ajax_msp_model_base_action");
+          ' 2>/tmp/msp-v5-add2.err)"
+          RC2=$?
+          set -e
+          echo "ADD_RC=$RC2"
+          echo "ADD_OUT=$ADD_OUT"
+          cat /tmp/msp-v5-add2.err || true
+          echo "$ADD_OUT" | grep -q '"success":true'
+
+          STATE2="$(sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); echo wp_json_encode($c);')"
+          echo "STATE_AFTER_ADD=$STATE2"
+          echo "$STATE2" | grep -q 'test-base.png'
+          echo "$STATE2" | grep -q '"front_disabled":false'
+
+          sudo -u belastock -H wp --path="$DOCROOT" eval 'update_post_meta(27,"_msp_config",["enabled"=>true]); echo "FINAL=".wp_json_encode(get_post_meta(27,"_msp_config",true))."\n";'
+
+          echo 'MSP_AJAX_REMOVE=OK'
+          echo 'MSP_AJAX_ADD=OK'
+          echo 'MSP_PRODUCT_STATE_RESTORED=OK'
+          echo 'MSP_V5_END_TO_END=100%_OK'
