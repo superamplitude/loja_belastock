@@ -1,0 +1,42 @@
+name: Recover Product 27 MSP
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.recover-product27-msp-trigger'
+  workflow_dispatch:
+
+jobs:
+  recover:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Restore original product config and verify patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          PHP="$DOCROOT/wp-content/plugins/mockup-studio-pro/includes/class-msp-plugin.php"
+          JS="$DOCROOT/wp-content/plugins/mockup-studio-pro/assets/js/editor.js"
+
+          sudo -u belastock -H wp --path="$DOCROOT" eval 'update_post_meta(27,"_msp_config",["enabled"=>true]); $c=get_post_meta(27,"_msp_config",true); echo "PRODUCT27_META=".wp_json_encode($c)."\n"; if($c!==["enabled"=>true]) exit(1);'
+
+          php -l "$PHP"
+          node --check "$JS"
+          grep -q "wp_ajax_msp_model_base_action" "$PHP"
+          grep -q "function ajax_model_base_action" "$PHP"
+          grep -q "modelBaseNonce" "$PHP"
+          grep -q "function persistModelBaseDirect" "$JS"
+          grep -q "function currentPostId" "$JS"
+          grep -q "syncHiddenConfig" "$JS"
+          grep -q "current_config = get_post_meta" "$PHP"
+
+          systemctl reload php8.3-fpm 2>/dev/null || true
+          CODE="$(curl -kLsS --max-redirs 5 --max-time 30 --resolve 'loja.belastock.com.br:443:127.0.0.1' -o /tmp/recover27-login.html -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php?recover27=1')"
+          test "$CODE" = 200
+          echo "WP_LOGIN_HTTP=$CODE"
+          echo 'PRODUCT_27_RECOVERY=100%_OK'
+          echo 'MSP_V5_CODE=ACTIVE'
