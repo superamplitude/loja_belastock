@@ -1,0 +1,20 @@
+name: Inspect MSP Assets V7
+on:
+  push:
+    branches: [main]
+    paths: ['.inspect-msp-assets-v7']
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    steps:
+      - name: Inspect assets
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          find "$P/assets" -maxdepth 2 -type f -printf '%p\n' | sort
+          echo '=== CSS matches ==='
+          grep -Rni -B4 -A25 -E 'msp-term-picker|msp-term-options|msp-color-terms-select|msp-picker-swatch|msp-term-option' "$P/assets" --include='*.css' || true
+          echo '=== ENQUEUE ==='
+          grep -n -B8 -A20 -E 'wp_enqueue_style|editor.css|admin.css|assets/css' "$P/includes/class-msp-plugin.php" || true
