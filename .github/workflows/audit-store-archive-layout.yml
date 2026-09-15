@@ -1,0 +1,32 @@
+name: Audit Store Archive Layout
+on:
+  push:
+    paths:
+      - '.github/workflows/audit-store-archive-layout.yml'
+jobs:
+  audit:
+    runs-on: self-hosted
+    steps:
+      - name: Inspect live archive layout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          echo '=== THEME ==='
+          sudo -u belastock -H wp --path="$DOCROOT" option get stylesheet
+          sudo -u belastock -H wp --path="$DOCROOT" theme list
+          echo '=== WC STATUS ==='
+          sudo -u belastock -H wp --path="$DOCROOT" plugin is-active woocommerce && echo WOOCOMMERCE=ACTIVE
+          echo '=== CATEGORY ==='
+          sudo -u belastock -H wp --path="$DOCROOT" term list product_cat --fields=term_id,name,slug,count | grep -i -E 'manga|longa' || true
+          echo '=== TEMPLATE FILES ==='
+          THEME="$(sudo -u belastock -H wp --path="$DOCROOT" option get stylesheet)"
+          T="$DOCROOT/wp-content/themes/$THEME"
+          find "$T" -maxdepth 3 -type f \( -name 'archive-product.php' -o -name 'taxonomy-product_cat.php' -o -name 'woocommerce.php' -o -name 'sidebar*.php' -o -name 'style.css' -o -name 'functions.php' \) -print
+          echo '=== PAGE HTML MARKERS ==='
+          URL='https://loja.belastock.com.br/categoria-produto/manga-longa/'
+          CODE="$(curl -kLsS --max-time 30 -o /tmp/manga.html -w '%{http_code}' "$URL")"
+          echo HTTP=$CODE
+          grep -o '<body[^>]*>' /tmp/manga.html | head -n1 || true
+          grep -Eo '<link[^>]+stylesheet[^>]*>' /tmp/manga.html | head -n30 || true
+          grep -n -E 'woocommerce|sidebar|widget|Nenhum produto|Manga Longa' /tmp/manga.html | head -n80 || true
