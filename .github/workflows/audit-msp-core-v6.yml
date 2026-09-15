@@ -1,0 +1,18 @@
+name: Audit MSP Core V6
+on:
+  push:
+    branches: [main]
+    paths: ['.audit-msp-core-v6-trigger']
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: [self-hosted, belastock-loja]
+    steps:
+      - name: Inspect core JS/PHP
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          echo '=== JS 1-230 ==='; sed -n '1,230p' "$P/assets/js/editor.js"
+          echo '=== PHP AJAX 630-760 ==='; sed -n '630,760p' "$P/includes/class-msp-plugin.php"
+          echo '=== PHP CLEAN/SAVE 910-1080 ==='; sed -n '910,1080p' "$P/includes/class-msp-plugin.php"
