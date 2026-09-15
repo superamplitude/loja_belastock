@@ -1,0 +1,17 @@
+name: Inspect MSP Class V9
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/inspect-msp-class-v9.yml']
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    steps:
+      - shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          grep -n -E '^class |^final class |instance\(\)' "$P/includes/class-msp-plugin.php" | head -n 30
+          sed -n '1,45p' "$P/mockup-studio-pro.php"
+          curl -kLsS --max-time 30 -o /tmp/home.html -w 'HOME=%{http_code}\n' 'https://loja.belastock.com.br/'
+          curl -kLsS --max-time 30 -o /tmp/login.html -w 'LOGIN=%{http_code}\n' 'https://loja.belastock.com.br/wp-login.php'
