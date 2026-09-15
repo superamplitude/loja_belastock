@@ -1,0 +1,72 @@
+name: Test MSP Base Manager V6
+on:
+  push:
+    branches: [main]
+    paths: ['.test-msp-base-manager-v6-trigger']
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    steps:
+      - name: Test add edit remove without leaving test data
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          STATE='/tmp/msp-v6-original-state.ser'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); file_put_contents("/tmp/msp-v6-original-state.ser",serialize($c)); echo "BACKUP_META=OK\n";'
+          restore(){ sudo -u belastock -H wp --path="$DOCROOT" eval '$c=unserialize(file_get_contents("/tmp/msp-v6-original-state.ser")); update_post_meta(27,"_msp_config",$c); echo "RESTORED=".wp_json_encode(get_post_meta(27,"_msp_config",true))."\n";' || true; }
+          trap restore EXIT
+
+          run_action(){
+            local scope="$1" template="$2" side="$3" mode="$4" url="$5" slug="${6:-}"
+            SCOPE="$scope" TEMPLATE="$template" SIDE="$side" MODE="$mode" URLV="$url" SLUG="$slug" \
+            sudo -u belastock -H env SCOPE="$scope" TEMPLATE="$template" SIDE="$side" MODE="$mode" URLV="$url" SLUG="$slug" wp --path="$DOCROOT" eval '
+              wp_set_current_user(1);
+              $_POST=[
+                "nonce"=>wp_create_nonce("msp_base_manager"),
+                "post_id"=>27,
+                "scope"=>getenv("SCOPE"),
+                "template"=>getenv("TEMPLATE"),
+                "side"=>getenv("SIDE"),
+                "mode"=>getenv("MODE"),
+                "url"=>getenv("URLV"),
+                "slug"=>getenv("SLUG")
+              ];
+              $_REQUEST=$_POST;
+              do_action("wp_ajax_msp_base_manager_action");
+            '
+          }
+
+          OUT="$(run_action model tshirt-short front add 'https://example.com/model-front-v6.png')"
+          echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); $r=$c["model_bases"]["tshirt-short"]??[]; if(($r["front"]??"")!=="https://example.com/model-front-v6.png" || !empty($r["front_disabled"])) exit(1); echo "MODEL_ADD=OK\n";'
+
+          OUT="$(run_action model tshirt-short front remove '')"
+          echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); $r=$c["model_bases"]["tshirt-short"]??[]; if(($r["front"]??"x")!=="" || empty($r["front_disabled"])) exit(1); echo "MODEL_REMOVE=OK\n";'
+
+          OUT="$(run_action default tshirt-short back add 'https://example.com/default-back-v6.png')"
+          echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); if(($c["back_base"]??"")!=="https://example.com/default-back-v6.png") exit(1); echo "DEFAULT_ADD=OK\n";'
+
+          OUT="$(run_action default tshirt-short back remove '')"
+          echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); if(($c["back_base"]??"x")!=="") exit(1); echo "DEFAULT_REMOVE=OK\n";'
+
+          COLOR_SLUG="$(sudo -u belastock -H wp --path="$DOCROOT" term list pa_cor --field=slug 2>/dev/null | head -n1 || true)"
+          if [ -n "$COLOR_SLUG" ]; then
+            OUT="$(run_action color tshirt-short front add 'https://example.com/color-front-v6.png' "$COLOR_SLUG")"
+            echo "$OUT" | grep -q '"success":true'
+            SLUG="$COLOR_SLUG" sudo -u belastock -H env SLUG="$COLOR_SLUG" wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);$s=getenv("SLUG");$r=$c["model_color_bases"]["tshirt-short"][$s]??[];if(($r["front"]??"")!=="https://example.com/color-front-v6.png")exit(1);echo "COLOR_ADD=OK\n";'
+            OUT="$(run_action color tshirt-short front remove '' "$COLOR_SLUG")"
+            echo "$OUT" | grep -q '"success":true'
+            SLUG="$COLOR_SLUG" sudo -u belastock -H env SLUG="$COLOR_SLUG" wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);$s=getenv("SLUG");$r=$c["model_color_bases"]["tshirt-short"][$s]??[];if(($r["front"]??"x")!=="")exit(1);echo "COLOR_REMOVE=OK\n";'
+          else
+            echo 'COLOR_TEST=SKIPPED_NO_TERMS'
+          fi
+
+          restore
+          trap - EXIT
+          echo 'MSP_BASE_MANAGER_V6_END_TO_END=100%_OK'
