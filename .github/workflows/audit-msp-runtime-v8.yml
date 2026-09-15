@@ -1,0 +1,15 @@
+name: Audit MSP Runtime V8
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/audit-msp-runtime-v8.yml']
+jobs:
+  audit:
+    runs-on: [self-hosted, belastock-loja]
+    steps:
+      - shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro/includes/class-msp-plugin.php'
+          nl -ba "$P" | sed -n '190,225p'
+          grep -n -B5 -A20 'baseManagerNonce' "$P" || true
