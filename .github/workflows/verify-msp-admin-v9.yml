@@ -1,0 +1,93 @@
+name: Verify MSP Admin V9
+on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/verify-msp-admin-v9.yml']
+  workflow_dispatch:
+jobs:
+  verify:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 20
+    steps:
+      - name: Verify UI structure and persistence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          PLUGIN="$DOCROOT/wp-content/plugins/mockup-studio-pro"
+          PHP="$PLUGIN/includes/class-msp-plugin.php"
+          JS="$PLUGIN/assets/js/editor.js"
+          CSS="$PLUGIN/assets/css/admin.css"
+          MAIN="$PLUGIN/mockup-studio-pro.php"
+
+          php -l "$PHP"
+          node --check "$JS"
+          sudo -u belastock -H wp --path="$DOCROOT" plugin is-active mockup-studio-pro
+          grep -q "define('MSP_VERSION', '1.9.1')" "$MAIN"
+          grep -q 'msp-products msp-products-v9' "$PHP"
+          grep -q 'msp-model-picker-v9' "$PHP"
+          grep -q 'msp_model_base_status' "$PHP"
+          grep -q 'Adicionar / trocar frente' "$PHP"
+          grep -q 'Adicionar / trocar costas' "$PHP"
+          grep -q 'msp-color-remove-base' "$PHP"
+          grep -q 'selectMspTemplate' "$JS"
+          grep -q 'msp-model-picker-button' "$JS"
+          grep -q 'MSP_ADMIN_LAYOUT_V9' "$CSS"
+          ! grep -q 'MSP_ADMIN_LAYOUT_V8' "$CSS"
+
+          # Renderiza o metabox real pelo WordPress para validar o HTML entregue ao navegador.
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$p=get_post(27); if(!$p) exit(2); ob_start(); MSP_Plugin::instance()->render_metabox($p); $h=ob_get_clean(); file_put_contents("/tmp/msp-v9-metabox.html",$h); echo "HTML_BYTES=".strlen($h)."\n";'
+          grep -q 'msp-model-picker-v9' /tmp/msp-v9-metabox.html
+          grep -q 'msp-products-v9' /tmp/msp-v9-metabox.html
+          grep -q 'msp_color_terms_select' /tmp/msp-v9-metabox.html
+          grep -q 'style="display:none!important"' /tmp/msp-v9-metabox.html
+          PICKERS="$(grep -o 'msp-model-picker-button' /tmp/msp-v9-metabox.html | wc -l)"
+          UPLOADS="$(grep -o 'msp-model-upload-base' /tmp/msp-v9-metabox.html | wc -l)"
+          REMOVES="$(grep -o 'msp-model-remove-base' /tmp/msp-v9-metabox.html | wc -l)"
+          echo "PICKER_BUTTONS=$PICKERS"
+          echo "MODEL_UPLOAD_BUTTONS=$UPLOADS"
+          echo "MODEL_REMOVE_BUTTONS=$REMOVES"
+          test "$PICKERS" -eq 6
+          test "$UPLOADS" -eq 12
+          test "$REMOVES" -eq 12
+
+          STATE='/tmp/msp-v9-original-state.ser'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); file_put_contents("/tmp/msp-v9-original-state.ser",serialize($c)); echo "META_BACKUP=OK\n";'
+          restore(){ sudo -u belastock -H wp --path="$DOCROOT" eval '$c=unserialize(file_get_contents("/tmp/msp-v9-original-state.ser")); update_post_meta(27,"_msp_config",$c); echo "META_RESTORED\n";' >/dev/null || true; }
+          trap restore EXIT
+
+          run_action(){
+            local scope="$1" template="$2" side="$3" mode="$4" url="$5" slug="${6:-}"
+            sudo -u belastock -H env SCOPE="$scope" TEMPLATE="$template" SIDE="$side" MODE="$mode" URLV="$url" SLUG="$slug" wp --path="$DOCROOT" eval '
+              wp_set_current_user(1);
+              $_POST=["nonce"=>wp_create_nonce("msp_base_manager"),"post_id"=>27,"scope"=>getenv("SCOPE"),"template"=>getenv("TEMPLATE"),"side"=>getenv("SIDE"),"mode"=>getenv("MODE"),"url"=>getenv("URLV"),"slug"=>getenv("SLUG")];
+              $_REQUEST=$_POST; do_action("wp_ajax_msp_base_manager_action");
+            '
+          }
+
+          OUT="$(run_action model tshirt-short front add 'https://example.com/v9-front.png')"; echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true); if(($c["model_bases"]["tshirt-short"]["front"]??"")!=="https://example.com/v9-front.png")exit(1); echo "MODEL_ADD=OK\n";'
+          OUT="$(run_action model tshirt-short front remove '')"; echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);$r=$c["model_bases"]["tshirt-short"]??[];if(($r["front"]??"x")!==""||empty($r["front_disabled"]))exit(1);echo "MODEL_REMOVE=OK\n";'
+
+          OUT="$(run_action default tshirt-short back add 'https://example.com/v9-default.png')"; echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);if(($c["back_base"]??"")!=="https://example.com/v9-default.png")exit(1);echo "DEFAULT_ADD=OK\n";'
+          OUT="$(run_action default tshirt-short back remove '')"; echo "$OUT" | grep -q '"success":true'
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);if(($c["back_base"]??"x")!=="")exit(1);echo "DEFAULT_REMOVE=OK\n";'
+
+          COLOR_SLUG="$(sudo -u belastock -H wp --path="$DOCROOT" term list pa_cor --field=slug 2>/dev/null | head -n1 || true)"
+          if [ -n "$COLOR_SLUG" ]; then
+            OUT="$(run_action color tshirt-short front add 'https://example.com/v9-color.png' "$COLOR_SLUG")"; echo "$OUT" | grep -q '"success":true'
+            SLUG="$COLOR_SLUG" sudo -u belastock -H env SLUG="$COLOR_SLUG" wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);$s=getenv("SLUG");$r=$c["model_color_bases"]["tshirt-short"][$s]??[];if(($r["front"]??"")!=="https://example.com/v9-color.png")exit(1);echo "COLOR_ADD=OK\n";'
+            OUT="$(run_action color tshirt-short front remove '' "$COLOR_SLUG")"; echo "$OUT" | grep -q '"success":true'
+            SLUG="$COLOR_SLUG" sudo -u belastock -H env SLUG="$COLOR_SLUG" wp --path="$DOCROOT" eval '$c=get_post_meta(27,"_msp_config",true);$s=getenv("SLUG");$r=$c["model_color_bases"]["tshirt-short"][$s]??[];if(($r["front"]??"x")!=="")exit(1);echo "COLOR_REMOVE=OK\n";'
+          fi
+          restore; trap - EXIT
+
+          HOME="$(curl -kLsS --max-time 30 -o /tmp/msp-v9-home.html -w '%{http_code}' 'https://loja.belastock.com.br/')"
+          LOGIN="$(curl -kLsS --max-time 30 -o /tmp/msp-v9-login.html -w '%{http_code}' 'https://loja.belastock.com.br/wp-login.php')"
+          echo "HOME_HTTP=$HOME LOGIN_HTTP=$LOGIN"
+          test "$HOME" = 200
+          test "$LOGIN" = 200
+          grep -q 'user_login' /tmp/msp-v9-login.html
+          echo 'MSP_ADMIN_V9_END_TO_END=100%_OK'
