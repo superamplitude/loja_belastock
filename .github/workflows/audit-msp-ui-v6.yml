@@ -1,0 +1,28 @@
+name: Audit MSP UI V6
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.audit-msp-ui-v6-trigger'
+  workflow_dispatch:
+jobs:
+  audit:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    steps:
+      - name: Inspect current MSP UI and handlers
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          PHP="$DOCROOT/wp-content/plugins/mockup-studio-pro/includes/class-msp-plugin.php"
+          JS="$DOCROOT/wp-content/plugins/mockup-studio-pro/assets/js/editor.js"
+          CSS="$DOCROOT/wp-content/plugins/mockup-studio-pro/assets/css/admin.css"
+          echo '=== RENDER METABOX 220-430 ==='
+          sed -n '220,430p' "$PHP"
+          echo '=== JS MODEL/COLOR HANDLERS 220-760 ==='
+          sed -n '220,760p' "$JS"
+          echo '=== CSS RELEVANT ==='
+          grep -n -A 20 -B 8 -E 'msp-products|msp-product-card|msp-model-base|msp-color|msp-supported|msp-base' "$CSS" | head -n 700 || true
+          echo '=== CURRENT PRODUCT META ==='
+          sudo -u belastock -H wp --path="$DOCROOT" eval '$q=new WP_Query(["post_type"=>"product","post_status"=>"any","posts_per_page"=>10,"fields"=>"ids"]); foreach($q->posts as $id){$c=get_post_meta($id,"_msp_config",true); if(is_array($c)){echo $id."|".get_the_title($id)."|".wp_json_encode($c,JSON_UNESCAPED_SLASHES)."\n";}}'
