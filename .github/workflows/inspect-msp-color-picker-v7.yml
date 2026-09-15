@@ -1,0 +1,21 @@
+name: Inspect MSP Color Picker V7
+on:
+  push:
+    branches: [main]
+    paths: ['.inspect-msp-color-picker-v7']
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    steps:
+      - name: Inspect deployed MSP color picker
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          echo '=== PHP COLOR MARKUP ==='
+          grep -n -B12 -A45 -E 'msp_color_terms_select|msp_term_options|msp_term_picker|msp_selected_color_terms' "$P/includes/class-msp-plugin.php" || true
+          echo '=== JS COLOR HANDLERS ==='
+          grep -n -B12 -A55 -E 'termSelect|termOptions|msp-color|msp_term|msp_color_terms_select|selected_color' "$P/assets/js/editor.js" || true
+          echo '=== CSS COLOR RULES ==='
+          grep -n -B8 -A35 -E 'msp-color|msp-term|msp_color|msp_term|select\[multiple\]' "$P/assets/css/editor.css" || true
