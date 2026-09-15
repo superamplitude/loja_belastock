@@ -1,0 +1,103 @@
+name: Fix Store Archive Layout V2
+on:
+  push:
+    paths:
+      - '.github/workflows/fix-store-archive-layout-v2.yml'
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Fix WooCommerce archive layout safely
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          THEME="$DOCROOT/wp-content/themes/belastock-store"
+          FUNCTIONS="$THEME/functions.php"
+          CSS="$THEME/assets/pro-v4.css"
+          STAMP="$(date +%Y%m%d_%H%M%S)"
+          BACKUP="/home/belastock/backups/theme/archive-layout-v2-$STAMP"
+          mkdir -p "$BACKUP"
+          cp -a "$FUNCTIONS" "$BACKUP/functions.php.before"
+          cp -a "$CSS" "$BACKUP/pro-v4.css.before"
+          echo "BACKUP=$BACKUP"
+
+          python3 - "$FUNCTIONS" "$CSS" <<'PY'
+          from pathlib import Path
+          import sys
+          functions=Path(sys.argv[1]); cssfile=Path(sys.argv[2])
+          php=functions.read_text(); css=cssfile.read_text()
+
+          pm='/* BS_SHOP_ARCHIVE_LAYOUT_V2 */'
+          php_block=r'''
+
+          /* BS_SHOP_ARCHIVE_LAYOUT_V2 */
+          add_action('wp', static function (): void {
+              if (!function_exists('is_shop')) return;
+              if (is_shop() || is_product_taxonomy()) {
+                  remove_action('woocommerce_sidebar', 'woocommerce_get_sidebar', 10);
+              }
+          }, 30);
+          '''
+          if pm not in php:
+              php=php.rstrip()+php_block+"\n"
+          functions.write_text(php)
+
+          cm='/* BS_SHOP_ARCHIVE_LAYOUT_V2 */'
+          css_block=r'''
+          /* BS_SHOP_ARCHIVE_LAYOUT_V2 */
+          body.post-type-archive-product,body.tax-product_cat,body.tax-product_tag{background:#f7f5f8!important}
+          body.post-type-archive-product #primary.content-area,body.tax-product_cat #primary.content-area,body.tax-product_tag #primary.content-area{width:min(var(--max),calc(100% - 40px))!important;max-width:none!important;margin:0 auto!important;padding:34px 0 72px!important;float:none!important}
+          body.post-type-archive-product #primary .site-main,body.tax-product_cat #primary .site-main,body.tax-product_tag #primary .site-main{width:100%!important;max-width:none!important;margin:0!important;padding:0!important}
+          body.post-type-archive-product #sidebar,body.tax-product_cat #sidebar,body.tax-product_tag #sidebar,body.post-type-archive-product .widget-area,body.tax-product_cat .widget-area,body.tax-product_tag .widget-area{display:none!important}
+          body.post-type-archive-product .woocommerce-breadcrumb,body.tax-product_cat .woocommerce-breadcrumb,body.tax-product_tag .woocommerce-breadcrumb{margin:0 0 16px!important;padding:0!important;color:#817886!important;font-size:12px!important;font-weight:650!important}
+          body.post-type-archive-product .woocommerce-breadcrumb a,body.tax-product_cat .woocommerce-breadcrumb a,body.tax-product_tag .woocommerce-breadcrumb a{color:#5f5663!important}
+          body.post-type-archive-product .woocommerce-products-header,body.tax-product_cat .woocommerce-products-header,body.tax-product_tag .woocommerce-products-header{margin:0 0 24px!important;padding:28px 32px!important;border:1px solid #e9e2eb!important;border-radius:20px!important;background:#fff!important;box-shadow:0 10px 32px rgba(54,34,60,.06)!important}
+          body.post-type-archive-product .woocommerce-products-header:before,body.tax-product_cat .woocommerce-products-header:before,body.tax-product_tag .woocommerce-products-header:before{content:'BELA STOCK';display:block;margin:0 0 7px;color:#6f267e;font-size:11px;font-weight:900;letter-spacing:.14em}
+          body.post-type-archive-product .woocommerce-products-header__title,body.tax-product_cat .woocommerce-products-header__title,body.tax-product_tag .woocommerce-products-header__title{margin:0!important;color:#171319!important;font-size:clamp(2rem,4vw,3.5rem)!important;line-height:.98!important;letter-spacing:-.045em!important}
+          body.post-type-archive-product .term-description,body.tax-product_cat .term-description,body.tax-product_tag .term-description{max-width:760px;margin:12px 0 0;color:#716b75;font-size:15px;line-height:1.65}
+          body.post-type-archive-product .woocommerce-notices-wrapper,body.tax-product_cat .woocommerce-notices-wrapper,body.tax-product_tag .woocommerce-notices-wrapper{margin:0 0 18px}
+          body.post-type-archive-product .woocommerce-info,body.tax-product_cat .woocommerce-info,body.tax-product_tag .woocommerce-info{position:relative;margin:18px 0 0!important;padding:38px 28px 38px 82px!important;border:1px solid #e6dce9!important;border-top:1px solid #e6dce9!important;border-radius:18px!important;background:#fff!important;color:#5f5663!important;box-shadow:0 8px 26px rgba(54,34,60,.05)!important;font-size:14px!important;line-height:1.5!important}
+          body.post-type-archive-product .woocommerce-info:before,body.tax-product_cat .woocommerce-info:before,body.tax-product_tag .woocommerce-info:before{content:'◇'!important;display:grid!important;place-items:center!important;position:absolute!important;left:24px!important;top:50%!important;transform:translateY(-50%)!important;width:40px!important;height:40px!important;border-radius:50%!important;background:#f3eaf5!important;color:#6f267e!important;font-size:20px!important;font-weight:900!important}
+          body.post-type-archive-product .woocommerce-info:after,body.tax-product_cat .woocommerce-info:after,body.tax-product_tag .woocommerce-info:after{display:none!important}
+          body.post-type-archive-product .woocommerce-result-count,body.tax-product_cat .woocommerce-result-count,body.tax-product_tag .woocommerce-result-count{margin:9px 0 18px!important;color:#756d79!important;font-size:13px!important}
+          body.post-type-archive-product .woocommerce-ordering,body.tax-product_cat .woocommerce-ordering,body.tax-product_tag .woocommerce-ordering{margin:0 0 18px!important}
+          body.post-type-archive-product .woocommerce-ordering select,body.tax-product_cat .woocommerce-ordering select,body.tax-product_tag .woocommerce-ordering select{min-height:42px;padding:0 38px 0 13px;border:1px solid #ded7e1;border-radius:12px;background:#fff;color:#332d35}
+          body.post-type-archive-product ul.products,body.tax-product_cat ul.products,body.tax-product_tag ul.products{clear:both!important;margin-top:8px!important}
+          body.post-type-archive-product .woocommerce-pagination,body.tax-product_cat .woocommerce-pagination,body.tax-product_tag .woocommerce-pagination{margin-top:30px!important}
+          body.post-type-archive-product .woocommerce-pagination ul,body.tax-product_cat .woocommerce-pagination ul,body.tax-product_tag .woocommerce-pagination ul{border:0!important;display:flex!important;gap:7px!important}
+          body.post-type-archive-product .woocommerce-pagination li,body.tax-product_cat .woocommerce-pagination li,body.tax-product_tag .woocommerce-pagination li{border:0!important}
+          body.post-type-archive-product .woocommerce-pagination a,body.post-type-archive-product .woocommerce-pagination span,body.tax-product_cat .woocommerce-pagination a,body.tax-product_cat .woocommerce-pagination span,body.tax-product_tag .woocommerce-pagination a,body.tax-product_tag .woocommerce-pagination span{display:grid!important;place-items:center!important;min-width:38px!important;height:38px!important;padding:0 10px!important;border:1px solid #ded7e1!important;border-radius:10px!important;background:#fff!important;color:#342d36!important}
+          body.post-type-archive-product .woocommerce-pagination .current,body.tax-product_cat .woocommerce-pagination .current,body.tax-product_tag .woocommerce-pagination .current{border-color:#6f267e!important;background:#6f267e!important;color:#fff!important}
+          @media(max-width:760px){body.post-type-archive-product #primary.content-area,body.tax-product_cat #primary.content-area,body.tax-product_tag #primary.content-area{width:calc(100% - 24px)!important;padding:22px 0 48px!important}body.post-type-archive-product .woocommerce-products-header,body.tax-product_cat .woocommerce-products-header,body.tax-product_tag .woocommerce-products-header{padding:22px 20px!important;border-radius:16px!important}body.post-type-archive-product .woocommerce-info,body.tax-product_cat .woocommerce-info,body.tax-product_tag .woocommerce-info{padding:28px 18px 28px 68px!important}body.post-type-archive-product .woocommerce-info:before,body.tax-product_cat .woocommerce-info:before,body.tax-product_tag .woocommerce-info:before{left:17px!important}}
+          '''
+          if cm in css:
+              css=css.split(cm,1)[0].rstrip()+"\n\n"+css_block.lstrip()
+          else:
+              css=css.rstrip()+"\n\n"+css_block.lstrip()
+          cssfile.write_text(css)
+          PY
+
+          chown belastock:belastock "$FUNCTIONS" "$CSS"
+          if ! php -l "$FUNCTIONS"; then
+            cp -a "$BACKUP/functions.php.before" "$FUNCTIONS"
+            cp -a "$BACKUP/pro-v4.css.before" "$CSS"
+            exit 1
+          fi
+
+          sudo -u belastock -H wp --path="$DOCROOT" cache flush >/dev/null 2>&1 || true
+          URL='https://loja.belastock.com.br/categoria-produto/manga-longa/'
+          CODE="$(curl -kLsS --max-time 30 -o /tmp/manga-v2.html -w '%{http_code}' "$URL")"
+          echo "HTTP=$CODE"
+          if [ "$CODE" != 200 ]; then
+            cp -a "$BACKUP/functions.php.before" "$FUNCTIONS"
+            cp -a "$BACKUP/pro-v4.css.before" "$CSS"
+            sudo -u belastock -H wp --path="$DOCROOT" cache flush >/dev/null 2>&1 || true
+            echo 'AUTO_ROLLBACK=HTTP_FAILURE'
+            exit 1
+          fi
+          grep -q 'BS_SHOP_ARCHIVE_LAYOUT_V2' "$FUNCTIONS"
+          grep -q 'BS_SHOP_ARCHIVE_LAYOUT_V2' "$CSS"
+          if grep -q '<div id="sidebar"' /tmp/manga-v2.html; then echo 'SIDEBAR_HTML=PRESENT_BUT_CSS_HIDDEN'; else echo 'SIDEBAR_HTML=REMOVED'; fi
+          grep -q 'woocommerce-products-header__title' /tmp/manga-v2.html
+          echo 'STORE_ARCHIVE_LAYOUT_V2=OK'
