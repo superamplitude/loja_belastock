@@ -1,0 +1,27 @@
+name: Fix MSP Model Remove V4
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-model-remove-v4-trigger'
+  workflow_dispatch:
+
+concurrency:
+  group: belastock-msp-model-remove-v4
+  cancel-in-progress: true
+
+jobs:
+  fix:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Apply native base remove click fix inside VPS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL 'https://raw.githubusercontent.com/superamplitude/loja_belastock/main/deploy/fix-msp-model-remove-v4.sh' -o /tmp/fix-msp-model-remove-v4.sh
+          chmod +x /tmp/fix-msp-model-remove-v4.sh
+          bash /tmp/fix-msp-model-remove-v4.sh
