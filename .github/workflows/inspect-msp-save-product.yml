@@ -1,0 +1,25 @@
+name: Inspect MSP Save Product
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-save-product-trigger'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Inspect save_product and clean_config
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          PHP='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro/includes/class-msp-plugin.php'
+          echo '=== SAVE_PRODUCT ==='
+          grep -n -A 170 -B 10 "function save_product" "$PHP" | head -n 220 || true
+          echo '=== CLEAN_CONFIG ==='
+          grep -n -A 180 -B 10 "function clean_config" "$PHP" | head -n 240 || true
