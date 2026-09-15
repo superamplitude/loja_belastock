@@ -1,0 +1,23 @@
+name: Rebuild MSP Admin V9
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/rebuild-msp-admin-v9.sh'
+      - '.github/workflows/rebuild-msp-admin-v9.yml'
+  workflow_dispatch:
+concurrency:
+  group: msp-admin-v9
+  cancel-in-progress: true
+jobs:
+  rebuild:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 20
+    steps:
+      - name: Apply and verify MSP V9 inside VPS
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          curl -fsSL 'https://raw.githubusercontent.com/superamplitude/loja_belastock/main/deploy/rebuild-msp-admin-v9.sh' -o /tmp/rebuild-msp-admin-v9.sh
+          chmod +x /tmp/rebuild-msp-admin-v9.sh
+          bash /tmp/rebuild-msp-admin-v9.sh
