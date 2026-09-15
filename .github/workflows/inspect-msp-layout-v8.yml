@@ -1,0 +1,22 @@
+name: Inspect MSP Layout V8
+on:
+  push:
+    branches: [main]
+    paths: ['.inspect-msp-layout-v8-trigger']
+  workflow_dispatch:
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    steps:
+      - name: Inspect current MSP layout
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          P='/home/belastock/htdocs/loja.belastock.com.br/wp-content/plugins/mockup-studio-pro'
+          echo '=== PHP 260-380 ==='
+          sed -n '260,380p' "$P/includes/class-msp-plugin.php"
+          echo '=== CSS HEAD ==='
+          sed -n '1,150p' "$P/assets/css/admin.css"
+          echo '=== CSS TAIL ==='
+          tail -n 90 "$P/assets/css/admin.css"
