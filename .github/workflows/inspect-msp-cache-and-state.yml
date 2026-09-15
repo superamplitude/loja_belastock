@@ -1,0 +1,40 @@
+name: Inspect MSP Cache And State
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-cache-state-trigger'
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Inspect enqueue versions and saved model states
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          PHP="$DOCROOT/wp-content/plugins/mockup-studio-pro/includes/class-msp-plugin.php"
+          JS="$DOCROOT/wp-content/plugins/mockup-studio-pro/assets/js/editor.js"
+          CSS="$DOCROOT/wp-content/plugins/mockup-studio-pro/assets/css/admin.css"
+          echo '=== ENQUEUE ==='
+          grep -n -C 3 -E "wp_enqueue_(script|style)|editor\.js|admin\.css" "$PHP" | head -n 160 || true
+          echo '=== FILE MTIME ==='
+          stat -c 'JS_MTIME=%Y JS_SIZE=%s' "$JS"
+          stat -c 'CSS_MTIME=%Y CSS_SIZE=%s' "$CSS"
+          echo '=== PRODUCT STATES ==='
+          sudo -u belastock -H wp --path="$DOCROOT" eval '
+          $q=new WP_Query(["post_type"=>"product","post_status"=>"any","posts_per_page"=>50,"fields"=>"ids"]);
+          foreach($q->posts as $id){
+            $c=get_post_meta($id,"_msp_config",true);
+            if(!is_array($c)) continue;
+            $title=get_the_title($id);
+            $tpl=sanitize_key((string)($c["template"]??""));
+            $mb=is_array($c["model_bases"]??null)?$c["model_bases"]:[];
+            echo "PRODUCT=$id|$title|TEMPLATE=$tpl|MODEL_BASES=".wp_json_encode($mb,JSON_UNESCAPED_SLASHES)."\n";
+          }'
