@@ -1,0 +1,32 @@
+name: Inspect MSP Remove V3
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.msp-remove-v3-inspect-trigger'
+  workflow_dispatch:
+concurrency:
+  group: belastock-msp-remove-v3-inspect
+  cancel-in-progress: true
+jobs:
+  inspect:
+    runs-on: [self-hosted, belastock-loja]
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Inspect JS and PHP after v3 patch
+        shell: bash
+        run: |
+          set +e
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          JS="$DOCROOT/wp-content/plugins/mockup-studio-pro/assets/js/editor.js"
+          PHP="$DOCROOT/wp-content/plugins/mockup-studio-pro/includes/class-msp-plugin.php"
+          echo '=== NODE CHECK ==='
+          node --check "$JS" 2>&1
+          echo "NODE_RC=$?"
+          echo '=== TARGET JS ==='
+          grep -n -C 8 -E 'modelSideDisabled|front_disabled|msp-model-remove-base|is-base-removed' "$JS" | head -n 240
+          echo '=== PHP CHECK ==='
+          php -l "$PHP" 2>&1
+          echo "PHP_RC=$?"
