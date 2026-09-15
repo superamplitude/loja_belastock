@@ -1,0 +1,32 @@
+name: Audit Belastock Theme Layout
+on:
+  push:
+    paths:
+      - '.github/workflows/audit-belastock-theme-layout.yml'
+jobs:
+  audit:
+    runs-on: self-hosted
+    steps:
+      - name: Inspect live theme and product archive
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          DOCROOT='/home/belastock/htdocs/loja.belastock.com.br'
+          T="$DOCROOT/wp-content/themes/belastock-store"
+          echo '=== FILES ==='
+          find "$T" -maxdepth 3 -type f | sort
+          echo '=== STYLE TOP ==='
+          sed -n '1,260p' "$T/style.css" 2>/dev/null || true
+          echo '=== FUNCTIONS ==='
+          sed -n '1,320p' "$T/functions.php" 2>/dev/null || true
+          echo '=== WC/TEMPLATES ==='
+          for f in "$T/woocommerce.php" "$T/archive-product.php" "$T/taxonomy-product_cat.php" "$T/sidebar.php" "$T/sidebar-shop.php" "$T/woocommerce/archive-product.php"; do
+            if [ -f "$f" ]; then echo "--- $f"; sed -n '1,320p' "$f"; fi
+          done
+          echo '=== LIVE PAGE ==='
+          URL='https://loja.belastock.com.br/categoria-produto/manga-longa/'
+          curl -kLsS --max-time 30 "$URL" -o /tmp/manga.html
+          grep -o '<body[^>]*>' /tmp/manga.html | head -n1 || true
+          grep -n -E 'site-main|woocommerce|sidebar|widget-area|Nenhum produto|Manga Longa|content-area|primary' /tmp/manga.html | head -n120 || true
+          echo '=== CSS LINKS ==='
+          grep -Eo '<link[^>]+stylesheet[^>]*>' /tmp/manga.html | head -n50 || true
